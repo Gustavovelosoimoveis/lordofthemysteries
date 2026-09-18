@@ -1,0 +1,6 @@
+{
+  "name": "Lord of the Mysteries RPG",
+  "description": "RPG de texto imersivo em primeira pessoa ambientado no universo de Lord of the Mysteries entre a queda de Roselle e 1349, com investigação dedutiva, Dark Academia e motor narrativo com IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
