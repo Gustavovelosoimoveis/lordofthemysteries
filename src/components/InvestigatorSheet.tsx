@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { GameOrigin } from "../types";
+import { ParticleSigil } from "./ParticleSigil";
 import {
   X,
   Scroll,
@@ -259,6 +260,16 @@ export const InvestigatorSheet: React.FC<InvestigatorSheetProps> = ({
               <span>{sanity}%</span>
             </div>
           </div>
+        </div>
+
+        {/* Sigilo Mental — retrato particulado da sanidade, treme sozinho quanto mais baixa a estabilidade */}
+        <div className="px-4 pt-3">
+          <div className="rounded-lg border border-[#8a6d3b]/25 bg-[#0d0a06]/60 overflow-hidden">
+            <ParticleSigil text={`${sanity}%`} instability={(100 - sanity) / 100} height={90} />
+          </div>
+          <p className="text-[9px] text-center text-[#8a7d69] font-mono uppercase tracking-wider mt-1">
+            Sigilo Mental — passe o mouse para perturbá-lo
+          </p>
         </div>
 
         {/* Attributes List with Golden Progress Bars */}
