@@ -1,15 +1,64 @@
 import React from "react";
 import { LocationSceneKey } from "../utils/locationBackground";
+import { AmbientMood } from "../utils/ambientMood";
 
 interface LocationBackdropProps {
   sceneKey: LocationSceneKey;
+  mood: AmbientMood;
 }
 
+// Fotos reais disponíveis, por local + clima (dia/noite). Quando não existe um par,
+// cai automaticamente no desenho vetorial (SVG) mais abaixo — nunca quebra, nunca some.
+const PHOTO_MANIFEST: Partial<Record<LocationSceneKey, Partial<Record<AmbientMood, string>>>> = {
+  quarto: {
+    "day-industrial": "/backgrounds/quarto_dia.webp",
+    "night-crimson": "/backgrounds/quarto_noite.webp",
+  },
+  rua: {
+    "day-industrial": "/backgrounds/rua_dia.webp",
+    "night-crimson": "/backgrounds/rua_noite.webp",
+  },
+  praca: {
+    "day-industrial": "/backgrounds/praca_dia.webp",
+    "night-crimson": "/backgrounds/praca_noite.webp",
+  },
+  beco: {
+    "night-crimson": "/backgrounds/beco_noite.webp",
+  },
+  escritorio: {
+    "day-industrial": "/backgrounds/escritorio_dia.webp",
+  },
+  comercio: {
+    "day-industrial": "/backgrounds/comercio_dia.webp",
+  },
+  santuario: {
+    "night-crimson": "/backgrounds/santuario_noite.webp",
+  },
+};
+
 /**
- * Camada de fundo sutil (SVG puro, sem imagens externas) atrás do texto da cena,
- * variando conforme o tipo de local — reforça a imersão sem pesar a página.
+ * Camada de fundo atrás do texto da cena. Usa uma fotografia real quando existe
+ * uma que combine com o local + clima atuais; caso contrário, usa um desenho
+ * vetorial leve (SVG) como reserva — nunca deixa a cena sem ambientação.
  */
-export const LocationBackdrop: React.FC<LocationBackdropProps> = ({ sceneKey }) => {
+export const LocationBackdrop: React.FC<LocationBackdropProps> = ({ sceneKey, mood }) => {
+  const photoUrl = PHOTO_MANIFEST[sceneKey]?.[mood];
+
+  if (photoUrl) {
+    return (
+      <div className="absolute inset-0 rounded-lg overflow-hidden pointer-events-none" aria-hidden="true">
+        <img
+          src={photoUrl}
+          alt=""
+          loading="lazy"
+          className="w-full h-full object-cover opacity-[0.16]"
+        />
+        {/* Gradiente escurecendo as bordas para não brigar com o texto */}
+        <div className="absolute inset-0 bg-gradient-to-b from-[#0a0d11]/40 via-transparent to-[#0a0d11]/70" />
+      </div>
+    );
+  }
+
   return (
     <div
       className="absolute inset-0 rounded-lg overflow-hidden pointer-events-none opacity-[0.08] text-[#c9a875]"

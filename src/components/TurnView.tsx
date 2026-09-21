@@ -2,6 +2,7 @@ import React, { useEffect, useMemo } from "react";
 import { Message, LedgerData } from "../types";
 import { parseGMResponse } from "../utils/parser";
 import { getLocationSceneKey } from "../utils/locationBackground";
+import { getAmbientMood } from "../utils/ambientMood";
 import { LocationBackdrop } from "./LocationBackdrop";
 import {
   Compass,
@@ -84,6 +85,7 @@ export const TurnView: React.FC<TurnViewProps> = ({
   // If assistant (GM) turn
   const parsed = message.parsed || parseGMResponse(message.content);
   const sceneKey = getLocationSceneKey(`${parsed.worldStatus || ""} ${parsed.scene || ""}`);
+  const sceneMood = getAmbientMood(parsed.worldStatus || "");
 
   // Split scene into paragraphs
   const sceneParagraphs = useMemo(() => {
@@ -152,7 +154,7 @@ export const TurnView: React.FC<TurnViewProps> = ({
       title={isTyping ? "Clique a qualquer momento para concluir a escrita imediatamente" : undefined}
     >
       {/* Fundo ambientado no local atual da cena — doca, beco, quarto, etc. */}
-      <LocationBackdrop sceneKey={sceneKey} />
+      <LocationBackdrop sceneKey={sceneKey} mood={sceneMood} />
 
       {/* Dog-ear page curl corner */}
       <div className="page-corner-curl" aria-hidden="true" />
