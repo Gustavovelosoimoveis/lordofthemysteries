@@ -239,12 +239,6 @@ export default function App() {
   const currentStatusString = latestAssistantMessage?.parsed?.worldStatus || ledger.timeAndWeather || "";
   const ambientMood = getAmbientMood(currentStatusString);
 
-  // Dynamic dilemma suggestions strictly parsed from current GM dilemma (never fallbacks, never hallucinated)
-  const activeSuggestions = useMemo(() => {
-    if (!latestAssistantMessage?.parsed?.dilemma || isStreaming) return [];
-    return extractCanonicalOptions(latestAssistantMessage.parsed.dilemma);
-  }, [latestAssistantMessage, isStreaming]);
-
   // Helper to serialize ledger for GM prompt context (ensures absolute memory of NPCs)
   const serializeLedgerContext = (l: LedgerData) => {
     const npcsDescription = (l.npcs || [])
@@ -1005,14 +999,13 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
         )}
       </main>
 
-      {/* Action Input Bar with Dynamic Dilemma Chips */}
+      {/* Action Input Bar */}
       {messages.length > 0 && (
         <ActionBar
           onSend={handleUserAction}
           isLoading={isLoading || isStreaming}
           draftText={draftActionText}
           onClearDraftText={() => setDraftActionText("")}
-          activeSuggestions={activeSuggestions}
         />
       )}
 

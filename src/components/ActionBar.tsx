@@ -8,7 +8,6 @@ interface ActionBarProps {
   disabled?: boolean;
   draftText?: string;
   onClearDraftText?: () => void;
-  activeSuggestions?: string[];
 }
 
 export const ActionBar: React.FC<ActionBarProps> = ({
@@ -17,7 +16,6 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   disabled,
   draftText,
   onClearDraftText,
-  activeSuggestions = [],
 }) => {
   const [input, setInput] = useState("");
   const [showTips, setShowTips] = useState(false);
@@ -85,50 +83,7 @@ export const ActionBar: React.FC<ActionBarProps> = ({
 
   return (
     <div className="sticky bottom-0 z-20 w-full border-t border-[#8a6d3b]/25 bg-[#0a0d11]/95 backdrop-blur-md p-3 sm:p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.8)]">
-      <div className="max-w-4xl mx-auto space-y-2">
-        {/* Dynamic Dilemma Action Chips (100% matched to current dilemma options, never generic) */}
-        {activeSuggestions && activeSuggestions.length > 0 && (
-          <div className="flex flex-col gap-1.5 pb-0.5">
-            <div className="flex items-center justify-between text-[11px] text-[#8a7d69] font-serif">
-              <span className="flex items-center gap-1.5 text-[#dfb87f] font-['Cinzel'] text-[10px] tracking-wider uppercase font-semibold">
-                <Sparkles className="w-3 h-3 text-[#dfb87f]" />
-                <span>Opções Canônicas do Dilema:</span>
-              </span>
-              <span className="text-[10px] text-[#7d715d] font-mono hidden sm:inline">
-                Clique para rascunhar no campo sem enviar
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-              {activeSuggestions.map((suggestion, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => {
-                    setInput(suggestion);
-                    if (textareaRef.current) {
-                      textareaRef.current.focus();
-                      setTimeout(() => {
-                        if (textareaRef.current) {
-                          textareaRef.current.style.height = "auto";
-                          textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
-                        }
-                      }, 40);
-                    }
-                  }}
-                  className="group px-3 py-1.5 rounded-md bg-gradient-to-r from-[#171d29] to-[#121620] hover:from-[#232c3d] hover:to-[#1a2230] border border-[#8a6d3b]/50 hover:border-[#dfb87f] text-[#ddd0b0] hover:text-[#fff8eb] transition-all text-xs font-serif flex items-center gap-2 max-w-sm sm:max-w-md text-left shadow-sm flex-shrink-0"
-                  title="Clique para rascunhar no campo sem enviar"
-                >
-                  <span className="font-['Cinzel'] font-bold text-[#dfb87f] text-[11px] px-1.5 py-0.5 rounded bg-[#20180e] border border-[#8a6d3b]/60 flex-shrink-0 group-hover:bg-[#2c2214]">
-                    {idx + 1}
-                  </span>
-                  <span className="truncate max-w-[280px] sm:max-w-xs">{suggestion}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
+      <div className="max-w-4xl mx-auto space-y-1.5">
         {/* Discrete trigger to reveal fixed investigation starters (collapsed by default) */}
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo } from "react";
 import { Message, LedgerData } from "../types";
 import { parseGMResponse } from "../utils/parser";
-import { extractCanonicalOptions } from "../utils/dilemmaOptions";
+import { getLocationSceneKey } from "../utils/locationBackground";
+import { LocationBackdrop } from "./LocationBackdrop";
 import {
   Compass,
   MessageSquareQuote,
@@ -82,7 +83,7 @@ export const TurnView: React.FC<TurnViewProps> = ({
 
   // If assistant (GM) turn
   const parsed = message.parsed || parseGMResponse(message.content);
-  const canonicalOptions = extractCanonicalOptions(parsed.dilemma);
+  const sceneKey = getLocationSceneKey(`${parsed.worldStatus || ""} ${parsed.scene || ""}`);
 
   // Split scene into paragraphs
   const sceneParagraphs = useMemo(() => {
@@ -150,6 +151,9 @@ export const TurnView: React.FC<TurnViewProps> = ({
       }`}
       title={isTyping ? "Clique a qualquer momento para concluir a escrita imediatamente" : undefined}
     >
+      {/* Fundo ambientado no local atual da cena — doca, beco, quarto, etc. */}
+      <LocationBackdrop sceneKey={sceneKey} />
+
       {/* Dog-ear page curl corner */}
       <div className="page-corner-curl" aria-hidden="true" />
 
@@ -434,37 +438,6 @@ export const TurnView: React.FC<TurnViewProps> = ({
                   );
                 })()}
               </div>
-
-              {/* Opções Canônicas do Dilema (Nunca inventadas, apenas lidas) */}
-              {canonicalOptions.length > 0 && (isComplete || typedLength >= dilemmaOffset) && (
-                <div className="pt-3 mt-3 border-t border-[#8a6d3b]/30 space-y-2">
-                  <div className="flex items-center justify-between text-[11px] text-[#a39785] font-serif">
-                    <span className="flex items-center gap-1.5 text-[#dfb87f] font-['Cinzel'] text-[10px] tracking-wider uppercase font-semibold">
-                      <Sparkles className="w-3 h-3 text-[#dfb87f]" />
-                      <span>Opções Canônicas do Dilema:</span>
-                    </span>
-                    <span className="text-[10px] text-[#7d715d] font-mono hidden sm:inline">
-                      Clique para rascunhar no campo sem enviar
-                    </span>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    {canonicalOptions.map((opt, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => onDraftAction?.(opt)}
-                        className="group px-3 py-2 rounded-md bg-[#161c28] hover:bg-[#222b3d] border border-[#8a6d3b]/50 hover:border-[#dfb87f] text-[#ddd0b0] hover:text-[#fff8eb] transition-all text-xs sm:text-sm font-serif flex items-start gap-2.5 text-left shadow-sm active:scale-[0.99]"
-                        title="Clique para rascunhar no campo sem enviar"
-                      >
-                        <span className="font-['Cinzel'] font-bold text-[#dfb87f] text-[11px] px-1.5 py-0.5 rounded bg-[#20180e] border border-[#8a6d3b]/60 flex-shrink-0 group-hover:bg-[#2c2214] mt-0.5">
-                          {idx + 1}
-                        </span>
-                        <span className="leading-snug">{opt}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
