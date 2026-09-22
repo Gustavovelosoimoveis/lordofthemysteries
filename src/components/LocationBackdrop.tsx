@@ -46,15 +46,15 @@ export const LocationBackdrop: React.FC<LocationBackdropProps> = ({ sceneKey, mo
 
   if (photoUrl) {
     return (
-      <div className="absolute inset-0 rounded-lg overflow-hidden pointer-events-none" aria-hidden="true">
-        <img
-          src={photoUrl}
-          alt=""
-          loading="lazy"
-          className="w-full h-full object-cover opacity-[0.16]"
+      <div className="location-backdrop absolute inset-0 rounded-lg overflow-hidden pointer-events-none" aria-hidden="true">
+        {/* O palco visual tem altura própria; o crescimento do texto não altera o enquadramento. */}
+        <div
+          className="location-backdrop-image absolute inset-x-0 top-0 opacity-[0.28]"
+          style={{ backgroundImage: `url(${photoUrl})` }}
         />
-        {/* Gradiente escurecendo as bordas para não brigar com o texto */}
-        <div className="absolute inset-0 bg-gradient-to-b from-[#0a0d11]/40 via-transparent to-[#0a0d11]/70" />
+        {/* Profundidade cinematográfica: luz no alto, leitura no centro e fade no rodapé. */}
+        <div className="location-backdrop-atmosphere absolute inset-0" />
+        <div className="location-backdrop-vignette absolute inset-0" />
       </div>
     );
   }
