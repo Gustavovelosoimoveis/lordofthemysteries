@@ -421,22 +421,22 @@
    quando o cartão cresce durante o efeito typewriter. */
 .location-backdrop {
   background: #0a0d11;
-  height: clamp(18rem, 52vw, 34rem);
-  min-height: 18rem;
+  height: clamp(22rem, 58vw, 38rem);
+  min-height: 22rem;
 }
 .location-backdrop-image {
   height: 100%;
   background-position: center top;
   background-repeat: no-repeat;
   background-size: cover;
-  filter: saturate(0.82) contrast(1.08) brightness(0.82);
+  filter: saturate(1.08) contrast(1.06) brightness(0.92);
   transform: scale(1.025);
   transform-origin: center top;
 }
 .location-backdrop-atmosphere {
   background:
-    linear-gradient(180deg, rgba(10, 13, 17, 0.18) 0%, rgba(10, 13, 17, 0.04) 28%, rgba(10, 13, 17, 0.58) 78%, #0a0d11 100%),
-    radial-gradient(ellipse 70% 56% at 50% 18%, rgba(223, 184, 127, 0.10), transparent 72%);
+    linear-gradient(180deg, rgba(10, 13, 17, 0.08) 0%, rgba(10, 13, 17, 0.02) 28%, rgba(10, 13, 17, 0.36) 78%, rgba(10, 13, 17, 0.88) 100%),
+    radial-gradient(ellipse 70% 56% at 50% 18%, rgba(223, 184, 127, 0.16), transparent 72%);
 }
 .location-backdrop-vignette {
   box-shadow: inset 0 0 90px rgba(0, 0, 0, 0.62), inset 0 -35px 55px rgba(10, 13, 17, 0.86);
@@ -455,6 +455,87 @@
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.surreal-particles-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+.surreal-particles-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.surreal-particle {
+  animation: surrealParticlePulse 4.8s ease-in-out infinite alternate;
+}
+
+.surreal-orbit-one {
+  transform-origin: 505px 155px;
+  animation: surrealOrbit 24s linear infinite;
+}
+
+.surreal-orbit-two {
+  transform-origin: 505px 155px;
+  animation: surrealOrbitReverse 31s linear infinite;
+}
+
+.surreal-constellation {
+  fill: none;
+  stroke: #e8c98e;
+  stroke-width: 0.7;
+  stroke-dasharray: 1 13;
+  stroke-linecap: round;
+  opacity: 0.36;
+  animation: surrealConstellation 8s ease-in-out infinite alternate;
+}
+
+.surreal-constellation-alt {
+  stroke: #a9d6cf;
+  stroke-dasharray: 1 19;
+  opacity: 0.24;
+  animation-delay: -3s;
+}
+
+.surreal-glyph-one {
+  transform-origin: 505px 155px;
+  animation: surrealGlyphPulse 6s ease-in-out infinite;
+}
+
+.surreal-glyph-two {
+  transform-origin: 790px 92px;
+  animation: surrealGlyphPulse 9s ease-in-out -2s infinite reverse;
+}
+
+@keyframes surrealParticlePulse {
+  0% { opacity: 0.42; transform: translate3d(0, 3px, 0) scale(0.92); }
+  100% { opacity: 1; transform: translate3d(0, -5px, 0) scale(1.16); }
+}
+
+@keyframes surrealOrbit {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes surrealOrbitReverse {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+@keyframes surrealConstellation {
+  from { opacity: 0.14; stroke-dashoffset: 0; }
+  to { opacity: 0.56; stroke-dashoffset: 38; }
+}
+
+@keyframes surrealGlyphPulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.92) rotate(0deg); }
+  50% { opacity: 0.92; transform: scale(1.08) rotate(18deg); }
 }
 
 .page-folio-card > :not(.location-backdrop) {
@@ -584,6 +665,10 @@
   }
 
   .street-life-overlay {
+    display: none;
+  }
+
+  .surreal-particles-overlay {
     display: none;
   }
 }

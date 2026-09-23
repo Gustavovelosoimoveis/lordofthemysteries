@@ -2,6 +2,7 @@ import React from "react";
 import { LocationSceneKey } from "../utils/locationBackground";
 import { AmbientMood } from "../utils/ambientMood";
 import { StreetLifeOverlay } from "./StreetLifeOverlay";
+import { SurrealParticlesOverlay } from "./SurrealParticlesOverlay";
 
 interface LocationBackdropProps {
   sceneKey: LocationSceneKey;
@@ -50,11 +51,12 @@ export const LocationBackdrop: React.FC<LocationBackdropProps> = ({ sceneKey, mo
       <div className="location-backdrop absolute inset-0 rounded-lg overflow-hidden pointer-events-none" aria-hidden="true">
         {/* O palco visual tem altura própria; o crescimento do texto não altera o enquadramento. */}
         <div
-          className="location-backdrop-image absolute inset-x-0 top-0 opacity-[0.28]"
+          className="location-backdrop-image absolute inset-x-0 top-0 opacity-[0.46]"
           style={{ backgroundImage: `url(${photoUrl})` }}
         />
         {/* Profundidade cinematográfica: luz no alto, leitura no centro e fade no rodapé. */}
         <div className="location-backdrop-atmosphere absolute inset-0" />
+        <SurrealParticlesOverlay intensity={sceneKey === "rua" ? 0.92 : 0.72} seed={sceneKey.length * 17 + mood.length} />
         {sceneKey === "rua" && <StreetLifeOverlay />}
         <div className="location-backdrop-vignette absolute inset-0" />
       </div>
