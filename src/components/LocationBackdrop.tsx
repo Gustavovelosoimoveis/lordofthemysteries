@@ -1,6 +1,7 @@
 import React from "react";
 import { LocationSceneKey } from "../utils/locationBackground";
 import { AmbientMood } from "../utils/ambientMood";
+import { StreetLifeOverlay } from "./StreetLifeOverlay";
 
 interface LocationBackdropProps {
   sceneKey: LocationSceneKey;
@@ -54,6 +55,7 @@ export const LocationBackdrop: React.FC<LocationBackdropProps> = ({ sceneKey, mo
         />
         {/* Profundidade cinematográfica: luz no alto, leitura no centro e fade no rodapé. */}
         <div className="location-backdrop-atmosphere absolute inset-0" />
+        {sceneKey === "rua" && <StreetLifeOverlay />}
         <div className="location-backdrop-vignette absolute inset-0" />
       </div>
     );
