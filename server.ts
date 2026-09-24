@@ -7,7 +7,7 @@ import { createServer as createViteServer } from "vite";
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 
 app.use(express.json({ limit: "5mb" }));
 
@@ -170,25 +170,14 @@ Ao listar as opções dentro do dilema, use SEMPRE e exatamente o padrão N. [At
 - O Game Master NUNCA deve fazer perguntas diretas ou falar como um assistente de IA (ex: NUNCA pergunte "O que você estava fazendo antes?", "Como posso ajudar?", ou "Escolha uma das opções abaixo:").
 - O Game Master deve apenas ler a ficha de investigador enviada e iniciar a história imediatamente narrando as consequências do despertar em um cenário perigoso ou misterioso, integrando o jogador diretamente aos acontecimentos na névoa de Backlund.`;
 
-// Candidate models in priority order for maximum resilience
-const CANDIDATE_MODELS = ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
-
-// Universal fallback executor for Gemini calls
-async function executeWithFallback<T>(
-  operationName: string,
-  fn: (model: string) => Promise<T>
-): Promise<T> {
-  let lastError: any = null;
-  for (const model of CANDIDATE_MODELS) {
-    try {
-      return await fn(model);
-    } catch (err: any) {
-      console.warn(`[Gemini Fallback] ${operationName} failed on model '${model}':`, err?.message || err);
-      lastError = err;
-    }
-  }
-  throw lastError || new Error(`All models failed for ${operationName}`);
-}
+// Um único modelo evita multiplicar o consumo quando uma chamada falha.
+// Pode ser substituído no Render sem alterar o código, mas o padrão econômico
+// para este projeto é o Gemini 3.1 Flash-Lite.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
+const MAX_HISTORY_MESSAGES = 10;
+const MAX_MESSAGE_CHARS = 6000;
+const NARRATIVE_MAX_OUTPUT_TOKENS = 700;
+const LEDGER_MAX_OUTPUT_TOKENS = 900;
 
 // Sanitize chat contents to adhere strictly to Gemini API constraints:
 // 1. Must start with role 'user'
@@ -198,11 +187,14 @@ function sanitizeContentsForGemini(
   messages: Array<{ role: string; content?: string }>,
   defaultFirstUserPrompt: string = "Desperte a crônica. Narre o momento presente em 1ª pessoa no formato obrigatório."
 ) {
-  const cleanList = (messages || [])
+  // O frontend continua enviando o histórico completo, mas somente as últimas
+  // interações são reenviadas ao modelo para evitar crescimento ilimitado.
+  const recentMessages = (messages || []).slice(-MAX_HISTORY_MESSAGES);
+  const cleanList = recentMessages
     .filter((m) => m && typeof m.content === "string" && m.content.trim().length > 0)
     .map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
-      text: m.content.trim(),
+      text: m.content.trim().slice(-MAX_MESSAGE_CHARS),
     }));
 
   if (cleanList.length === 0) {
@@ -238,7 +230,8 @@ app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
     game: "Lord of the Mysteries RPG Engine",
-    models: CANDIDATE_MODELS,
+    model: GEMINI_MODEL,
+    maxHistoryMessages: MAX_HISTORY_MESSAGES,
   });
 });
 
@@ -271,16 +264,15 @@ Conclua SEMPRE com o dilema imediato e tenso.`;
 
     const contents = [{ role: "user", parts: [{ text: prologuePrompt }] }];
 
-    const response = await executeWithFallback("api-prologue", async (model) => {
-      return await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction: dynamicSystemInstruction,
-          temperature: 0.85,
-          topP: 0.95,
-        },
-      });
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents,
+      config: {
+        systemInstruction: dynamicSystemInstruction,
+        temperature: 0.85,
+        topP: 0.95,
+        maxOutputTokens: NARRATIVE_MAX_OUTPUT_TOKENS,
+      },
     });
 
     const replyText = response.text || "";
@@ -315,16 +307,15 @@ app.post("/api/chat", async (req, res) => {
       dynamicSystemInstruction += `\n\n[REGISTRO DE MEMÓRIA ATUAL (FATOS ESTABELECIDOS & HISTÓRICO DE NPCS - MEMÓRIA ABSOLUTA)]:\n${ledgerContext}`;
     }
 
-    const response = await executeWithFallback("api-chat", async (model) => {
-      return await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction: dynamicSystemInstruction,
-          temperature: 0.85,
-          topP: 0.95,
-        },
-      });
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents,
+      config: {
+        systemInstruction: dynamicSystemInstruction,
+        temperature: 0.85,
+        topP: 0.95,
+        maxOutputTokens: NARRATIVE_MAX_OUTPUT_TOKENS,
+      },
     });
 
     const reply = response.text || "";
@@ -362,40 +353,28 @@ app.post("/api/chat/stream", async (req, res) => {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
 
-    let streamSuccess = false;
-    let streamError: any = null;
+    try {
+      const stream = await ai.models.generateContentStream({
+        model: GEMINI_MODEL,
+        contents,
+        config: {
+          systemInstruction: dynamicSystemInstruction,
+          temperature: 0.85,
+          topP: 0.95,
+          maxOutputTokens: NARRATIVE_MAX_OUTPUT_TOKENS,
+        },
+      });
 
-    for (const model of CANDIDATE_MODELS) {
-      try {
-        const stream = await ai.models.generateContentStream({
-          model,
-          contents,
-          config: {
-            systemInstruction: dynamicSystemInstruction,
-            temperature: 0.85,
-            topP: 0.95,
-          },
-        });
-
-        for await (const chunk of stream) {
-          const chunkText = chunk.text || "";
-          if (chunkText) {
-            res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
-          }
+      for await (const chunk of stream) {
+        const chunkText = chunk.text || "";
+        if (chunkText) {
+          res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
         }
-
-        streamSuccess = true;
-        break;
-      } catch (err: any) {
-        console.warn(`[Stream Fallback] Failed with model ${model}:`, err?.message || err);
-        streamError = err;
       }
-    }
-
-    if (!streamSuccess) {
-      res.write(`data: ${JSON.stringify({ error: streamError?.message || "Erro no streaming de narrativa" })}\n\n`);
-    } else {
       res.write(`data: [DONE]\n\n`);
+    } catch (err: any) {
+      console.warn(`[Gemini] Streaming failed with model '${GEMINI_MODEL}':`, err?.message || err);
+      res.write(`data: ${JSON.stringify({ error: err?.message || "Erro no streaming de narrativa" })}\n\n`);
     }
     res.end();
   } catch (error: any) {
@@ -456,15 +435,14 @@ Retorne um JSON estrito com a seguinte estrutura:
   "detectedMood": "calm" | "mystery" | "discovery" | "tension"
 }`;
 
-    const response = await executeWithFallback("ledger-extract", async (model) => {
-      return await ai.models.generateContent({
-        model,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.15,
-        },
-      });
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.15,
+        maxOutputTokens: LEDGER_MAX_OUTPUT_TOKENS,
+      },
     });
 
     const parsed = JSON.parse(response.text || "{}");
