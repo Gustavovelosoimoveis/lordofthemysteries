@@ -403,7 +403,7 @@ ${(ledger.playerNotes || []).map((note) => `- ${note}`).join("\n") || "Nenhuma a
                         <div className="space-y-0.5">
                           <p className="text-[#e0d6c5]">{item.reason}</p>
                           <span className="text-[10px] font-mono text-[#786d5c]">
-                            Horário: {item.timestamp}
+                            Horário: {typeof item.timestamp === "number" ? new Date(item.timestamp).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : item.timestamp}
                           </span>
                         </div>
                         <span className={`px-2 py-0.5 rounded font-mono text-xs font-bold flex-shrink-0 ${

@@ -1,4 +1,5 @@
 export type AudioMood = "calm" | "mystery" | "discovery" | "tension";
+export type GameMode = "ai" | "offline";
 
 export interface Message {
   id: string;
@@ -53,6 +54,8 @@ export interface LedgerData {
   secretsDiscovered?: string[]; 
   chosenPathwaySeq9?: string; 
   discoveredPathways?: string[]; 
+  /** Estado serializável do Motor Local. Mantido opcional para compatibilidade com saves antigos/IA. */
+  offlineState?: import("./utils/offlineEngine").OfflineGameState;
 }
 
 export interface GameOrigin {

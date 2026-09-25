@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Send, Eye, MessageSquare, Search, Lightbulb, Shield, Loader2, Sparkles, ChevronDown } from "lucide-react";
 import { audioEngine } from "../utils/audioEngine";
+import { GameMode } from "../types";
 
 interface ActionBarProps {
   onSend: (text: string) => void;
@@ -8,6 +9,7 @@ interface ActionBarProps {
   disabled?: boolean;
   draftText?: string;
   onClearDraftText?: () => void;
+  gameMode?: GameMode;
 }
 
 export const ActionBar: React.FC<ActionBarProps> = ({
@@ -16,6 +18,7 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   disabled,
   draftText,
   onClearDraftText,
+  gameMode = "ai",
 }) => {
   const [input, setInput] = useState("");
   const [showTips, setShowTips] = useState(false);
@@ -167,7 +170,11 @@ export const ActionBar: React.FC<ActionBarProps> = ({
               onChange={handleInput}
               onKeyDown={handleKeyDown}
               disabled={isLoading || disabled}
-              placeholder="Descreva sua ação em 1ª pessoa (ex: 'Recuo um passo, noto o anel de bronze em seu dedo e pergunto calmamente...')"
+              placeholder={
+                gameMode === "offline"
+                  ? "Escreva livremente — o Motor Local entende ações compostas (ex: 'Finjo ir embora, espero ele relaxar e sigo à distância...')"
+                  : "Descreva sua ação em 1ª pessoa (ex: 'Recuo um passo, noto o anel de bronze em seu dedo e pergunto calmamente...')"
+              }
               className="w-full resize-none bg-transparent px-3.5 py-2.5 text-sm sm:text-base font-serif text-[#ddd0b0] placeholder-[#7d715d] focus:outline-none max-h-44 disabled:opacity-50"
             />
           </div>
@@ -191,7 +198,7 @@ export const ActionBar: React.FC<ActionBarProps> = ({
         </form>
 
         <div className="flex items-center justify-between text-[10px] text-[#8a7e6b] px-1 font-mono">
-          <span>Humano Comum • Sem Poção • As escolhas são permanentes</span>
+          <span>{gameMode === "offline" ? "Motor Local • Sem IA/API • Ações livres e persistentes" : "Humano Comum • Sem Poção • As escolhas são permanentes"}</span>
           <span>Pressione Enter para enviar, Shift+Enter para nova linha</span>
         </div>
       </div>

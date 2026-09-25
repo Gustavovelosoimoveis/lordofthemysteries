@@ -18,6 +18,7 @@ import {
   SunMedium,
 } from "lucide-react";
 import { audioEngine, AudioMood } from "../utils/audioEngine";
+import { GameMode } from "../types";
 
 interface HeaderProps {
   onOpenLedger: () => void;
@@ -35,6 +36,7 @@ interface HeaderProps {
   playerName?: string;
   userMuted?: boolean;
   onToggleUserMute?: () => void;
+  gameMode?: GameMode;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -53,6 +55,7 @@ export const Header: React.FC<HeaderProps> = ({
   playerName,
   userMuted = false,
   onToggleUserMute,
+  gameMode = "ai",
 }) => {
   const [isPlayingAudio, setIsPlayingAudio] = useState(audioEngine.isPlaying());
   const [volume, setVolume] = useState(audioEngine.getVolume());
@@ -159,6 +162,16 @@ export const Header: React.FC<HeaderProps> = ({
               <h1 className="font-['Cinzel'] font-bold text-sm sm:text-base text-[#f5ebd7] tracking-wider uppercase drop-shadow-sm flex items-center gap-1.5">
                 Lord of the Mysteries
               </h1>
+              <span
+                className={`hidden sm:inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] font-mono uppercase tracking-wider ${
+                  gameMode === "offline"
+                    ? "bg-[#132019] border-[#456b52] text-[#91c9a2]"
+                    : "bg-[#21182a] border-[#6b4fa3] text-[#c9afe5]"
+                }`}
+                title={gameMode === "offline" ? "Motor Local: sem IA, sem API key" : "Motor Narrativo com IA"}
+              >
+                {gameMode === "offline" ? "Local · Sem API" : "IA"}
+              </span>
 
               {/* Prominent Investigator Badge */}
               <button

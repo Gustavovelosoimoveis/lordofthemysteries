@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { GameOrigin } from "../types";
-import { Scroll, X, Shield, Brain, Activity, Eye, MessageSquare, Plus, Minus } from "lucide-react";
+import { GameMode, GameOrigin } from "../types";
+import { Scroll, X, Shield, Brain, Activity, Eye, MessageSquare, Plus, Minus, Cpu, Sparkles } from "lucide-react";
 
 interface OriginSelectorModalProps {
   isOpen: boolean;
@@ -10,6 +10,9 @@ interface OriginSelectorModalProps {
   isNameOnly?: boolean;
   currentOrigin?: GameOrigin | null;
   onUpdatePlayerName?: (name: string) => void;
+  gameMode?: GameMode;
+  onGameModeChange?: (mode: GameMode) => void;
+  offlineStats?: { starts: number; endings: number; intents: number };
 }
 
 type OriginOptions = "Pessoa Normal de Loen" | "Amnésico Humano" | "Transmigrado da Terra";
@@ -22,6 +25,9 @@ export const OriginSelectorModal: React.FC<OriginSelectorModalProps> = ({
   isNameOnly = false,
   currentOrigin = null,
   onUpdatePlayerName,
+  gameMode = "offline",
+  onGameModeChange,
+  offlineStats = { starts: 24, endings: 30, intents: 19 },
 }) => {
   const [playerName, setPlayerName] = useState(currentOrigin?.playerName || "");
   const [gender, setGender] = useState(currentOrigin?.gender || "Masculino");
@@ -238,6 +244,49 @@ INSTRUÇÃO PARA O GAME MASTER: O jogador ACABOU de despertar. Ele é 100% munda
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
+          <div className="space-y-2">
+            <label className="block text-[11px] font-mono uppercase text-[#a89371]">Motor Narrativo</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => onGameModeChange?.("offline")}
+                className={`p-3 rounded-lg border text-left transition-all ${
+                  gameMode === "offline"
+                    ? "bg-[#18231d] border-[#5f8c70] shadow-[0_0_18px_rgba(95,140,112,0.12)]"
+                    : "bg-[#11151e] border-[#252c3b] hover:border-[#4b5b70]"
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <Cpu className="w-4 h-4 text-[#8fc7a4]" />
+                  <span className="font-['Cinzel'] text-xs font-bold uppercase text-[#eef6ef]">Motor Local</span>
+                  <span className="ml-auto text-[9px] font-mono uppercase px-1.5 py-0.5 rounded border border-[#5f8c70]/60 text-[#9fd0ad]">Sem API</span>
+                </div>
+                <p className="text-[10px] text-[#aab7ad] font-serif leading-relaxed">
+                  Funciona sem IA e sem chave externa. Interpreta texto livre por intenção, alvo, tom, atributos e memória. {offlineStats.starts} prólogos e {offlineStats.endings} finais possíveis.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onGameModeChange?.("ai")}
+                className={`p-3 rounded-lg border text-left transition-all ${
+                  gameMode === "ai"
+                    ? "bg-[#241d2d] border-[#8062a1] shadow-[0_0_18px_rgba(128,98,161,0.12)]"
+                    : "bg-[#11151e] border-[#252c3b] hover:border-[#4b5b70]"
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <Sparkles className="w-4 h-4 text-[#c7a6e8]" />
+                  <span className="font-['Cinzel'] text-xs font-bold uppercase text-[#f1e9f8]">Motor com IA</span>
+                  <span className="ml-auto text-[9px] font-mono uppercase px-1.5 py-0.5 rounded border border-[#8062a1]/60 text-[#c7a6e8]">Gemini</span>
+                </div>
+                <p className="text-[10px] text-[#aaa2b3] font-serif leading-relaxed">
+                  Mantém o motor narrativo atual, com geração aberta via servidor e API configurada.
+                </p>
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-mono uppercase text-[#a89371] mb-1.5">Nome do Personagem</label>
@@ -340,7 +389,7 @@ INSTRUÇÃO PARA O GAME MASTER: O jogador ACABOU de despertar. Ele é 100% munda
             disabled={!playerName.trim()}
             className="w-full sm:w-auto px-8 py-3 rounded-lg border border-[#8a6d3b] bg-gradient-to-r from-[#382b19] to-[#241c10] text-[#f0e6d6] hover:from-[#4d3c23] hover:to-[#332717] hover:border-[#dfb87f] font-['Cinzel'] tracking-wider text-xs uppercase font-bold transition-all shadow-md disabled:opacity-40"
           >
-            Despertar em Loen
+            {gameMode === "offline" ? "Despertar no Motor Local" : "Despertar em Loen"}
           </button>
         </div>
       </div>

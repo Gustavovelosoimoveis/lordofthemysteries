@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, Suspense, lazy } from "react";
-import { Message, LedgerData, GameOrigin } from "./types";
+import { Message, LedgerData, GameOrigin, GameMode } from "./types";
 import { parseGMResponse } from "./utils/parser";
 import { extractCanonicalOptions } from "./utils/dilemmaOptions";
 import { getAmbientMood } from "./utils/ambientMood";
@@ -7,6 +7,7 @@ import { Header } from "./components/Header";
 import { TurnView } from "./components/TurnView";
 import { ActionBar } from "./components/ActionBar";
 import { audioEngine } from "./utils/audioEngine";
+import { OFFLINE_ENGINE_STATS, runOfflineTurn, startOfflineChronicle } from "./utils/offlineEngine";
 import { Scroll, AlertCircle, RefreshCw, Sparkles, Compass, Feather, BookOpen, ShieldAlert } from "lucide-react";
 
 // Modais carregados sob demanda (lazy) — não pesam no carregamento inicial da tela de narrativa
@@ -21,6 +22,7 @@ const STORAGE_MESSAGES_KEY = "lom_rpg_history_v1";
 const STORAGE_LEDGER_KEY = "lom_rpg_ledger_v1";
 const STORAGE_ORIGIN_KEY = "lom_rpg_origin_v1";
 const STORAGE_MUTE_KEY = "lom_rpg_user_muted_v1";
+const STORAGE_MODE_KEY = "lom_rpg_game_mode_v2";
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -42,6 +44,17 @@ export default function App() {
       return localStorage.getItem(STORAGE_MUTE_KEY) === "true";
     } catch {
       return false;
+    }
+  });
+
+  const [gameMode, setGameMode] = useState<GameMode>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_MODE_KEY);
+      if (saved === "ai" || saved === "offline") return saved;
+      // Saves antigos vieram do motor de IA. Jogos novos passam a sugerir o motor local.
+      return messages.length > 0 ? "ai" : "offline";
+    } catch {
+      return "offline";
     }
   });
 
@@ -148,6 +161,14 @@ export default function App() {
       }
     }
   }, [origin]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_MODE_KEY, gameMode);
+    } catch (e) {
+      // ignore
+    }
+  }, [gameMode]);
 
   // Sync mute state and handle audio engine start/stop
   useEffect(() => {
@@ -301,6 +322,37 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
     };
     setLedger(initialLedger);
 
+    // MOTOR LOCAL: nenhuma requisição HTTP, nenhuma API key e nenhuma IA externa.
+    if (gameMode === "offline") {
+      try {
+        const localResult = startOfflineChronicle(selected, initialLedger);
+        const localOrigin = { ...selected, location: localResult.ledger.location };
+        setOrigin(localOrigin);
+        setLedger(localResult.ledger);
+        audioEngine.setMood(localResult.mood);
+        const text = localResult.text;
+        setMessages([
+          {
+            id: "turn-" + Date.now(),
+            role: "assistant",
+            content: text,
+            timestamp: Date.now(),
+            parsed: parseGMResponse(text),
+            suggestedActions: localResult.suggestedActions,
+            audioMood: localResult.mood,
+          },
+        ]);
+      } catch (err: any) {
+        console.error("Local narrative engine failed:", err);
+        setErrorMessage(err.message || "Falha no Motor Local.");
+        setMessages([]);
+      } finally {
+        setIsLoading(false);
+        setIsStreaming(false);
+      }
+      return;
+    }
+
     const assistantMsgId = "turn-" + Date.now();
     // Initial placeholder for Game Master's opening narration
     setMessages([
@@ -389,6 +441,34 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
 
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
+
+    if (gameMode === "offline") {
+      setIsLoading(true);
+      try {
+        const localResult = runOfflineTurn(actionText, origin, ledger);
+        audioEngine.setMood(localResult.mood);
+        setLedger(localResult.ledger);
+        setMessages([
+          ...updatedMessages,
+          {
+            id: "turn-" + (Date.now() + 1),
+            role: "assistant",
+            content: localResult.text,
+            timestamp: Date.now(),
+            parsed: parseGMResponse(localResult.text),
+            suggestedActions: localResult.suggestedActions,
+            audioMood: localResult.mood,
+          },
+        ]);
+      } catch (err: any) {
+        console.error("Offline turn failed:", err);
+        setErrorMessage(err.message || "O Motor Local não conseguiu interpretar esta ação.");
+      } finally {
+        setIsLoading(false);
+        setIsStreaming(false);
+      }
+      return;
+    }
 
     await fetchNarrativeStream(updatedMessages, origin, ledger);
   };
@@ -699,7 +779,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
           }
           currentSanity = updatedSanity;
           newHistory.push({
-            timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+            timestamp: Date.now(),
             delta,
             reason: data.sanityReason || (delta < 0 ? "Choque psíquico ao encarar o arcano" : "Compostura mental preservada"),
           });
@@ -712,7 +792,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
             ? "Alerta"
             : currentSanity >= 25
             ? "Perturbado"
-            : "Mutação Iminente";
+            : "À Beira da Mutação";
 
         // Extract and accumulate newly discovered pathways from narrative
         let updatedDiscovered = [...(prev.discoveredPathways || [])];
@@ -773,6 +853,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
     }
     setMessages([]);
     setOrigin(null);
+    setErrorMessage(null);
     audioEngine.setMood("calm");
     localStorage.removeItem(STORAGE_MESSAGES_KEY);
     localStorage.removeItem(STORAGE_LEDGER_KEY);
@@ -895,6 +976,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
         playerName={origin?.playerName}
         userMuted={userMuted}
         onToggleUserMute={handleToggleUserMute}
+        gameMode={gameMode}
       />
 
       {/* Main Narrative Scroll Area ("A TELA CLEAN") */}
@@ -915,6 +997,11 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
             <button
               type="button"
               onClick={() => {
+                if (gameMode === "offline") {
+                  // Nunca converte silenciosamente um erro local em chamada de API.
+                  setErrorMessage(null);
+                  return;
+                }
                 if (messages.length > 0) {
                   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
                   if (lastUserMsg) {
@@ -924,8 +1011,8 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
               }}
               className="px-2.5 py-1 rounded bg-[#3d1a17] hover:bg-[#52221e] text-[#f7c5c1] text-xs font-serif flex items-center gap-1 border border-[#7a322b]"
             >
-              <RefreshCw className="w-3 h-3" />
-              <span>Tentar Novamente</span>
+              {gameMode === "offline" ? <AlertCircle className="w-3 h-3" /> : <RefreshCw className="w-3 h-3" />}
+              <span>{gameMode === "offline" ? "Fechar aviso" : "Tentar Novamente"}</span>
             </button>
           </div>
         )}
@@ -954,7 +1041,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
               </h2>
 
               <p className="text-sm sm:text-base text-[#b0a290] font-serif leading-relaxed max-w-xl mx-auto">
-                O motor do jogo assume o papel do <strong>Game Master</strong> canônico. Você inicia diretamente na cena como um humano mundano em um distrito imprevisível de Loen ou Trier, antes do despertar de Klein Moretti (1198–1349).
+                O motor do jogo assume o papel do <strong>Game Master</strong> canônico. Você pode jogar com o novo <strong>Motor Local sem IA/API</strong> ou manter o motor com IA, sempre iniciando como um humano mundano antes do despertar de Klein Moretti (1198–1349).
               </p>
             </div>
 
@@ -974,9 +1061,9 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
             <div className="pt-2 flex items-center gap-4 text-[11px] font-mono text-[#786e5e]">
               <span>22 Sequências 9 Canônicas</span>
               <span>•</span>
-              <span>Memória Absoluta de NPCs</span>
+              <span>{OFFLINE_ENGINE_STATS.starts} Inícios Locais</span>
               <span>•</span>
-              <span>Início Imprevisível</span>
+              <span>{OFFLINE_ENGINE_STATS.endings} Finais</span>
             </div>
           </div>
         ) : (
@@ -1000,12 +1087,13 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
       </main>
 
       {/* Action Input Bar */}
-      {messages.length > 0 && (
+      {messages.length > 0 && !(gameMode === "offline" && ledger.offlineState?.endingId) && (
         <ActionBar
           onSend={handleUserAction}
           isLoading={isLoading || isStreaming}
           draftText={draftActionText}
           onClearDraftText={() => setDraftActionText("")}
+          gameMode={gameMode}
         />
       )}
 
@@ -1056,6 +1144,9 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
         isNameOnly={messages.length > 0 && (!origin?.playerName || !origin.playerName.trim())}
         currentOrigin={origin}
         onUpdatePlayerName={handleUpdatePlayerName}
+        gameMode={gameMode}
+        onGameModeChange={setGameMode}
+        offlineStats={OFFLINE_ENGINE_STATS}
       />
 
       {/* Lore Guide Modal */}
