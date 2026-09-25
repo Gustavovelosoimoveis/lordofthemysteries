@@ -23,12 +23,38 @@ export type LocalIntent =
 
 type AttributeKey = "vigor" | "destreza" | "intelecto" | "percepcao" | "carisma";
 
+export type NpcAgendaGoal =
+  | "conceal-evidence"
+  | "recover-object"
+  | "sell-information"
+  | "seek-protection"
+  | "flee-town"
+  | "test-player"
+  | "alert-network"
+  | "seek-authorities"
+  | "frame-player"
+  | "investigate-alone";
+
+export interface OfflineNpcAgenda {
+  npcName: string;
+  role: string;
+  goal: NpcAgendaGoal;
+  progress: number;
+  urgency: number;
+  nextActionTurn: number;
+  exposed: boolean;
+  resolved: boolean;
+  history: string[];
+}
+
 export interface OfflineGameState {
-  engineVersion: 2;
+  engineVersion: 3;
   startId: string;
   turn: number;
   phase: number;
   seed: number;
+  /** Código curto e compartilhável que torna a campanha reproduzível. */
+  campaignSeed: string;
   pressure: number;
   evidence: number;
   trust: number;
@@ -43,6 +69,11 @@ export interface OfflineGameState {
   visitedLocations: string[];
   npcTrust: Record<string, number>;
   playerCommitments: string[];
+  /** Eventos já usados para evitar repetição dentro da mesma crônica. */
+  eventHistory: string[];
+  lastEventTurn: number;
+  /** Objetivos que avançam mesmo quando o jogador ignora os NPCs. */
+  npcAgendas: Record<string, OfflineNpcAgenda>;
   /** Último foco inferido para resolver referências como “ele”, “ela” ou “isso” em turnos seguintes. */
   focusNpc?: string;
   focusItem?: string;
@@ -79,6 +110,31 @@ interface OfflineEnding {
   title: string;
   condition: (s: OfflineGameState, l: LedgerData) => boolean;
   epilogue: (origin: GameOrigin, s: OfflineGameState, l: LedgerData) => string;
+}
+
+interface OfflineEventResult {
+  text: string;
+  dialogue?: string;
+  clue?: string;
+  mystery?: string;
+  secret?: string;
+  pressureDelta?: number;
+  evidenceDelta?: number;
+  trustDelta?: number;
+  lawfulnessDelta?: number;
+  occultDelta?: number;
+  sanityDelta?: number;
+  mood?: AudioMood;
+}
+
+interface OfflineEventTemplate {
+  id: string;
+  minTurn?: number;
+  maxTurn?: number;
+  minPhase?: number;
+  maxPhase?: number;
+  condition?: (s: OfflineGameState, l: LedgerData) => boolean;
+  run: (start: OfflineStart, s: OfflineGameState, l: LedgerData) => OfflineEventResult;
 }
 
 interface ParsedAction {
@@ -606,6 +662,506 @@ function ending(id: string, title: string, condition: OfflineEnding["condition"]
   return { id, title, condition, epilogue: text };
 }
 
+const NPC_AGENDA_GOALS: NpcAgendaGoal[] = [
+  "conceal-evidence",
+  "recover-object",
+  "sell-information",
+  "seek-protection",
+  "flee-town",
+  "test-player",
+  "alert-network",
+  "seek-authorities",
+  "frame-player",
+  "investigate-alone",
+];
+
+function agendaLabel(goal: NpcAgendaGoal): string {
+  const labels: Record<NpcAgendaGoal, string> = {
+    "conceal-evidence": "apagar rastros antes que virem prova",
+    "recover-object": "recuperar o objeto central do incidente",
+    "sell-information": "transformar informação em vantagem",
+    "seek-protection": "encontrar proteção antes de falar demais",
+    "flee-town": "sair da cidade sem deixar uma rota óbvia",
+    "test-player": "descobrir até onde o investigador pode ser manipulado",
+    "alert-network": "avisar uma rede maior sobre a investigação",
+    "seek-authorities": "criar um registro oficial que sirva de proteção",
+    "frame-player": "empurrar a suspeita para o investigador",
+    "investigate-alone": "resolver uma parte do caso sem depender do jogador",
+  };
+  return labels[goal];
+}
+
+function createNpcAgenda(name: string, role: string, seed: number, offset: number): OfflineNpcAgenda {
+  const goal = choose(NPC_AGENDA_GOALS, seed + offset * 173);
+  return {
+    npcName: name,
+    role,
+    goal,
+    progress: 0,
+    urgency: 1 + Math.floor(seeded01(seed + offset * 311) * 3),
+    nextActionTurn: 2 + Math.floor(seeded01(seed + offset * 521) * 3) + offset,
+    exposed: false,
+    resolved: false,
+    history: [],
+  };
+}
+
+function initializeNpcAgendas(start: OfflineStart, seed: number): Record<string, OfflineNpcAgenda> {
+  const primary = createNpcAgenda(start.npc.name, start.npc.role, seed, 0);
+  let secondary = createNpcAgenda(start.secondNpc.name, start.secondNpc.role, seed, 1);
+  // Evita que os dois personagens importantes comecem com exatamente o mesmo impulso oculto.
+  if (secondary.goal === primary.goal) {
+    const idx = (NPC_AGENDA_GOALS.indexOf(secondary.goal) + 3) % NPC_AGENDA_GOALS.length;
+    secondary = { ...secondary, goal: NPC_AGENDA_GOALS[idx] };
+  }
+  return {
+    [normalizeText(primary.npcName)]: primary,
+    [normalizeText(secondary.npcName)]: secondary,
+  };
+}
+
+const INTERMEDIATE_EVENTS: OfflineEventTemplate[] = [
+  {
+    id: "anonymous-note",
+    minTurn: 2,
+    run: (start) => ({
+      text: `Uma folha dobrada aparece onde eu tinha certeza de não haver nada. A mensagem é curta: “Pare de perguntar sobre ${start.nextLocation}.” O papel não traz assinatura, mas foi arrancado de um bloco usado em escritório, não de um caderno pessoal.`,
+      clue: `bilhete anônimo manda interromper perguntas sobre ${start.nextLocation}`,
+      pressureDelta: 3,
+      mood: "mystery",
+    }),
+  },
+  {
+    id: "watched-window",
+    minTurn: 2,
+    condition: (s) => s.pressure >= 20,
+    run: () => ({
+      text: `No reflexo de uma vidraça noto a mesma silhueta duas vezes, separada por ruas demais para ser coincidência. Quando me viro, sobra apenas o movimento da névoa e um bonde passando devagar.`,
+      pressureDelta: 4,
+      mystery: "Quem passou a acompanhar meus deslocamentos — e desde quando?",
+      mood: "tension",
+    }),
+  },
+  {
+    id: "missing-page",
+    minTurn: 3,
+    condition: (_s, l) => (l.clues || []).length >= 2,
+    run: () => ({
+      text: `Ao revisar minhas anotações percebo que uma página foi retirada com cuidado, rente à costura. Não levaram tudo: levaram justamente o trecho que ligava duas pistas que pareciam independentes.`,
+      pressureDelta: 4,
+      clue: "alguém teve acesso às anotações e retirou apenas a ligação entre duas pistas",
+      mood: "tension",
+    }),
+  },
+  {
+    id: "false-witness",
+    minTurn: 3,
+    run: (start) => ({
+      text: `Uma testemunha que eu não procurei surge com uma versão perfeita demais. Ela cita ${start.object} antes que eu mencione o objeto. O erro é pequeno, mas transforma depoimento em pista.`,
+      evidenceDelta: 1,
+      clue: `uma testemunha espontânea conhecia ${start.object} antes de eu revelar sua existência`,
+      mood: "discovery",
+    }),
+  },
+  {
+    id: "street-tail",
+    minTurn: 3,
+    condition: (s) => s.route === "clandestina" || s.deception >= 2,
+    run: () => ({
+      text: `O homem que me segue troca de chapéu numa esquina, mas não troca o jeito de poupar a perna esquerda. Percebo a substituição tarde o bastante para entender que não é um curioso: é uma vigilância organizada.`,
+      pressureDelta: 5,
+      clue: "a vigilância contra mim usa troca de observadores em pontos combinados",
+      mood: "tension",
+    }),
+  },
+  {
+    id: "carriage-at-dawn",
+    minTurn: 4,
+    run: (start) => ({
+      text: `Uma carruagem sem brasão para por menos de um minuto. Ninguém desce. Um envelope é deixado sob um banco e recolhido por outra pessoa logo depois. O segundo passageiro segue na direção de ${start.nextLocation}.`,
+      evidenceDelta: 1,
+      clue: `uma troca por mensageiros em carruagem conecta a rua atual a ${start.nextLocation}`,
+    }),
+  },
+  {
+    id: "rain-erases-tracks",
+    minTurn: 2,
+    maxPhase: 1,
+    run: () => ({
+      text: `A chuva engrossa de repente e apaga marcas que eu ainda pretendia medir. Antes de desaparecerem, consigo notar que um dos rastros vinha no sentido contrário ao que a versão oficial exige.`,
+      clue: "rastros apagados pela chuva contradiziam a direção narrada pela versão oficial",
+      evidenceDelta: 1,
+    }),
+  },
+  {
+    id: "clerk-remembers",
+    minTurn: 3,
+    condition: (s) => s.trust >= 1 || s.lawfulness >= 2,
+    run: (start) => ({
+      text: `Um escriturário que eu tratei como pessoa, e não como mobília, me chama de lado. Ele lembra de um registro corrigido duas vezes na mesma noite e de um sobrenome ligado a ${start.nextLocation}.`,
+      clue: `um registro administrativo foi corrigido duas vezes para ocultar ligação com ${start.nextLocation}`,
+      evidenceDelta: 1,
+      trustDelta: 1,
+      mood: "discovery",
+    }),
+  },
+  {
+    id: "worker-whisper",
+    minTurn: 3,
+    condition: (s) => s.mercy >= 1 || s.trust >= 2,
+    run: (start) => ({
+      text: `Um trabalhador espera os outros se afastarem antes de falar. Ele não sabe o que está acontecendo, mas reconhece o padrão: gente recebendo ordem para esquecer horários e não perguntar por ${start.nextLocation}.`,
+      clue: `trabalhadores receberam ordens informais para não comentar movimentações ligadas a ${start.nextLocation}`,
+      trustDelta: 1,
+    }),
+  },
+  {
+    id: "bell-code",
+    minTurn: 4,
+    run: () => ({
+      text: `Sinos tocam fora do horário litúrgico. A sequência se repete depois de alguns minutos, igual demais para acaso. Anoto os intervalos e percebo que funcionam como um código simples de três sinais.`,
+      evidenceDelta: 1,
+      clue: "uma sequência de sinos fora de hora é usada como sinalização entre pontos distantes",
+      mood: "mystery",
+    }),
+  },
+  {
+    id: "duplicate-key",
+    minTurn: 4,
+    condition: (_s, l) => (l.items || []).length > 0,
+    run: (start) => ({
+      text: `Numa banca de ferragens vejo uma chave com desgaste quase idêntico ao de ${start.object}. O vendedor jura que fez três cópias para um cliente que pagou em dinheiro e não deixou nome.`,
+      clue: `existem cópias recentes relacionadas a ${start.object}`,
+      evidenceDelta: 1,
+      mood: "discovery",
+    }),
+  },
+  {
+    id: "burned-letter",
+    minTurn: 4,
+    condition: (s) => s.pressure >= 30,
+    run: (start) => ({
+      text: `Num braseiro encontro metade de uma carta que não terminou de queimar. Restam duas palavras úteis: “transferência” e “${start.nextLocation}”. Alguém teve pressa de destruir o resto.`,
+      clue: `fragmento queimado menciona uma transferência para ${start.nextLocation}`,
+      evidenceDelta: 1,
+      pressureDelta: 2,
+    }),
+  },
+  {
+    id: "newspaper-column",
+    minTurn: 5,
+    condition: (s) => s.evidence >= 3,
+    run: (start) => ({
+      text: `Uma nota curta no jornal descreve um “acidente banal” com detalhes que só quem viu minhas pistas poderia conhecer. O texto tenta encerrar o assunto antes que a cidade comece a fazer perguntas.`,
+      clue: `uma nota de jornal antecipa a versão pública do incidente e contém detalhes não divulgados`,
+      pressureDelta: 3,
+    }),
+  },
+  {
+    id: "police-rounds",
+    minTurn: 4,
+    condition: (s) => s.lawfulness >= 2 || s.violence >= 2,
+    run: () => ({
+      text: `Patrulhas passam com frequência incomum. Um guarda me reconhece rápido demais — não como criminoso, ainda, mas como nome que já circulou numa conversa de delegacia.`,
+      pressureDelta: 3,
+      lawfulnessDelta: 1,
+      mystery: "Por que meu nome já circula entre autoridades que eu não procurei?",
+    }),
+  },
+  {
+    id: "gaslight-flicker",
+    minTurn: 3,
+    condition: (s) => s.occultExposure >= 1,
+    run: (start) => ({
+      text: `As chamas dos lampiões diminuem na mesma ordem em que eu revejo mentalmente as pistas. Quando penso em ${start.secret}, a última chama apaga. Posso chamar de coincidência — uma vez.`,
+      occultDelta: 1,
+      sanityDelta: -2,
+      mystery: "Por que fenômenos físicos parecem reagir quando certas conclusões se aproximam?",
+      mood: "mystery",
+    }),
+  },
+  {
+    id: "crimson-dream",
+    minTurn: 5,
+    condition: (s) => s.occultExposure >= 2,
+    run: (start) => ({
+      text: `Durmo por minutos e sonho com ${start.nextLocation} visto de cima, sob a Lua Carmesim. Ao acordar, encontro barro seco na barra da roupa. Não aceito o sonho como prova, mas também não consigo descartá-lo.`,
+      occultDelta: 1,
+      sanityDelta: -3,
+      clue: `barro seco após um sonho coincide com material ligado a ${start.nextLocation}`,
+      mood: "tension",
+    }),
+  },
+  {
+    id: "warehouse-shift",
+    minPhase: 1,
+    run: (start) => ({
+      text: `Uma mudança de turno acontece cedo demais. Homens que não estavam escalados entram por uma porta lateral e retiram caixas sem passar pelo registro. Uma delas carrega a mesma marca associada ao caso inicial.`,
+      clue: `uma troca de turno irregular permite retirar material sem registro em direção a ${start.nextLocation}`,
+      evidenceDelta: 1,
+      pressureDelta: 2,
+    }),
+  },
+  {
+    id: "dead-drop",
+    minPhase: 1,
+    condition: (s) => s.route === "clandestina" || s.curiosity >= 4,
+    run: () => ({
+      text: `Descubro um ponto morto de mensagens: uma rachadura atrás de uma placa de rua onde papéis entram e saem sem que os remetentes se encontrem. O último bilhete foi recolhido há menos de uma hora.`,
+      clue: "a rede usa um ponto morto de mensagens para separar remetentes e destinatários",
+      evidenceDelta: 1,
+    }),
+  },
+  {
+    id: "borrowed-coat",
+    minPhase: 1,
+    run: () => ({
+      text: `Reconheço um casaco que já vi antes, mas não a pessoa dentro dele. A roupa está sendo usada como senha visual; quem observa de longe identifica a peça, não o rosto.`,
+      clue: "roupas específicas funcionam como identificação entre membros que não precisam se conhecer",
+      evidenceDelta: 1,
+    }),
+  },
+  {
+    id: "forged-pass",
+    minPhase: 1,
+    condition: (s) => s.lawfulness >= 1 || s.evidence >= 4,
+    run: (start) => ({
+      text: `Um passe oficial parece correto até eu comparar a perfuração com um documento verdadeiro. O carimbo é legítimo; o formulário não. Alguém com acesso institucional está ajudando a circulação até ${start.nextLocation}.`,
+      clue: `documentos falsos usam carimbos oficiais verdadeiros para facilitar acesso a ${start.nextLocation}`,
+      evidenceDelta: 1,
+    }),
+  },
+  {
+    id: "hidden-ledger",
+    minPhase: 1,
+    condition: (s) => s.evidence >= 4,
+    run: (start) => ({
+      text: `Atrás de contas comuns encontro uma segunda numeração feita a lápis. Não são valores: são horários. O padrão coincide com movimentações já ligadas a ${start.nextLocation}.`,
+      clue: `um livro-caixa esconde horários de movimentação sob números de contabilidade`,
+      evidenceDelta: 2,
+      mood: "discovery",
+    }),
+  },
+  {
+    id: "rival-investigator",
+    minPhase: 1,
+    minTurn: 6,
+    run: (start) => ({
+      text: `Alguém está refazendo meus passos. Não parece pertencer à mesma rede que tento descobrir: faz perguntas diferentes e chega sempre algumas horas depois. No bolso de um informante encontro apenas as iniciais “R.V.” e uma referência a ${start.nextLocation}.`,
+      mystery: "Quem é o outro investigador que refaz meus passos?",
+      clue: `um investigador desconhecido identificado apenas como R.V. também procura ${start.nextLocation}`,
+      pressureDelta: 2,
+    }),
+  },
+  {
+    id: "locked-room-changed",
+    minPhase: 1,
+    condition: (s) => s.visitedLocations.length >= 2,
+    run: () => ({
+      text: `Volto a um ponto já visitado e encontro a disposição do ambiente alterada. Nada valioso sumiu. O que mudou foram ângulos, distâncias e linhas de visão — como se alguém estivesse reconstruindo o que eu pude perceber.`,
+      pressureDelta: 4,
+      clue: "uma cena já visitada foi rearranjada para ocultar o que eu poderia ter observado antes",
+      mood: "tension",
+    }),
+  },
+  {
+    id: "river-package",
+    minPhase: 1,
+    run: (start) => ({
+      text: `Um pacote encerado é retirado da água antes de afundar. Dentro há recibos sem nomes, mas as datas acompanham cada passo importante do caso. A última linha termina em ${start.nextLocation}.`,
+      clue: `recibos descartados no rio registram pagamentos sincronizados com os principais eventos do caso`,
+      evidenceDelta: 1,
+    }),
+  },
+  {
+    id: "coded-advert",
+    minPhase: 1,
+    run: () => ({
+      text: `Um anúncio banal se repete em dois jornais com erros de pontuação idênticos. Lidos como separadores, os erros formam uma instrução de encontro. Não é uma cifra sofisticada; é uma cifra feita para parecer desinteressante.`,
+      clue: "anúncios de jornal usam pontuação errada como código para marcar encontros",
+      evidenceDelta: 1,
+    }),
+  },
+  {
+    id: "church-warning",
+    minPhase: 1,
+    condition: (s) => s.occultExposure >= 2 || s.lawfulness >= 3,
+    run: () => ({
+      text: `Um clérigo que não conheço pede que eu pare de tratar certos símbolos como simples decoração. Ele não explica o significado; apenas recomenda que eu não os copie e que não os observe antes de dormir.`,
+      occultDelta: 1,
+      trustDelta: 1,
+      mystery: "Que regra torna certos símbolos perigosos mesmo sem um ritual?",
+      mood: "mystery",
+    }),
+  },
+  {
+    id: "doctor-record",
+    minPhase: 1,
+    condition: (s) => s.evidence >= 3,
+    run: (start) => ({
+      text: `Um registro médico descreve três pacientes sem relação aparente. Todos tiveram o mesmo sintoma antes de sumirem da rotina: acordavam repetindo o nome de ${start.nextLocation}.`,
+      clue: `pacientes sem relação repetiram o nome de ${start.nextLocation} antes de desaparecer da rotina`,
+      occultDelta: 1,
+      evidenceDelta: 1,
+    }),
+  },
+  {
+    id: "auction-list",
+    minPhase: 2,
+    run: (start) => ({
+      text: `Uma lista de leilão privado inclui objetos descritos de modo propositalmente vago. Um lote corresponde a ${start.object}; outro traz apenas a anotação “recuperado do mesmo incidente”.`,
+      clue: `um leilão privado trata ${start.object} como parte de uma série de objetos recuperados`,
+      evidenceDelta: 1,
+      pressureDelta: 2,
+    }),
+  },
+  {
+    id: "midnight-knock",
+    minPhase: 2,
+    run: () => ({
+      text: `Três batidas soam na porta e ninguém responde quando pergunto quem é. No corredor há apenas um fósforo queimado colocado de pé contra o rodapé. Minutos depois, ouço as mesmas três batidas no andar de baixo.`,
+      pressureDelta: 5,
+      occultDelta: 1,
+      sanityDelta: -2,
+      mood: "tension",
+    }),
+  },
+  {
+    id: "blackout",
+    minPhase: 2,
+    condition: (s) => s.pressure >= 45,
+    run: () => ({
+      text: `A iluminação de toda a quadra falha ao mesmo tempo. Na escuridão, portas se abrem, passos mudam de direção e um assobio curto coordena movimentos. Quando a luz retorna, alguém aproveitou os segundos para alterar a cena.`,
+      pressureDelta: 6,
+      clue: "um apagão coordenado foi usado para movimentar pessoas e material sem testemunhas confiáveis",
+      mood: "tension",
+    }),
+  },
+  {
+    id: "witness-disappears",
+    minPhase: 2,
+    condition: (s) => s.trust <= 2 && s.pressure >= 45,
+    run: () => ({
+      text: `Uma pessoa que aceitaria falar comigo não aparece ao encontro. O quarto está arrumado demais e a mala sumiu. Não encontro sinais de luta — apenas pressa ou obediência.`,
+      pressureDelta: 5,
+      mystery: "A testemunha fugiu por vontade própria ou foi retirada antes que pudesse falar?",
+    }),
+  },
+  {
+    id: "witness-returns",
+    minPhase: 2,
+    condition: (s) => s.trust >= 4 && s.mercy >= 2,
+    run: (start) => ({
+      text: `Uma testemunha que havia desaparecido retorna por conta própria. Ela não quer dinheiro; quer a promessa de que outra pessoa ficará fora disso. Em troca, confirma que ${start.secret}.`,
+      secret: start.secret,
+      evidenceDelta: 1,
+      trustDelta: 2,
+      mood: "discovery",
+    }),
+  },
+  {
+    id: "trap-door",
+    minPhase: 2,
+    condition: (s) => s.evidence >= 5,
+    run: (start) => ({
+      text: `Uma diferença no som do piso denuncia uma abertura sob tábuas recentes. O compartimento não guarda tesouro: guarda embalagens, listas de nomes e um mapa parcial de acesso a ${start.nextLocation}.`,
+      clue: `um compartimento oculto contém listas e um mapa parcial de acesso a ${start.nextLocation}`,
+      evidenceDelta: 2,
+      mood: "discovery",
+    }),
+  },
+  {
+    id: "broken-watch",
+    minPhase: 2,
+    run: () => ({
+      text: `Dois relógios encontrados em contextos diferentes pararam no mesmo minuto. Um terceiro, ainda funcionando, perde exatamente sete minutos por dia. A coincidência deixa de ser coincidência quando as datas são comparadas.`,
+      clue: "relógios de cenas diferentes registram o mesmo minuto crítico e um desvio regular de sete minutos",
+      evidenceDelta: 1,
+      mystery: "O horário real dos eventos foi deliberadamente deslocado?",
+    }),
+  },
+  {
+    id: "cleaner-arrives",
+    minPhase: 2,
+    condition: (s) => s.evidence >= 6,
+    run: () => ({
+      text: `Um homem com material de limpeza chega antes de qualquer chamado formal. Ele sabe quais superfícies tocar e quais ignorar. Quando percebe meu interesse, abandona o balde e vai embora sem cobrar serviço algum.`,
+      clue: "um agente de limpeza chegou antes do chamado e sabia quais superfícies poderiam conter vestígios",
+      pressureDelta: 4,
+      evidenceDelta: 1,
+    }),
+  },
+  {
+    id: "counterfeit-clue",
+    minPhase: 2,
+    condition: (s) => s.evidence >= 5,
+    run: (start) => ({
+      text: `Encontro uma pista boa demais: limpa, direta e apontando para um culpado conveniente. O problema é que o material de suporte foi produzido depois do incidente. Alguém começou a fabricar respostas para mim.`,
+      clue: `uma prova plantada foi produzida depois do incidente para apontar um culpado conveniente`,
+      pressureDelta: 3,
+      evidenceDelta: 1,
+    }),
+  },
+  {
+    id: "network-mistake",
+    minPhase: 2,
+    condition: (s) => s.pressure >= 55,
+    run: (start) => ({
+      text: `A rede comete um erro por pressa: duas instruções diferentes usam a mesma expressão incomum e o mesmo horário de referência. Pela primeira vez consigo provar coordenação, não apenas semelhança.`,
+      clue: `duas ordens independentes repetem a mesma expressão e horário, provando coordenação entre células do caso`,
+      evidenceDelta: 2,
+      pressureDelta: 2,
+      mood: "discovery",
+    }),
+  },
+  {
+    id: "official-seal",
+    minPhase: 2,
+    condition: (s) => s.lawfulness >= 4,
+    run: (start) => ({
+      text: `Um documento que deveria estar arquivado aparece com selo de retirada autorizado. A assinatura pertence a alguém que estava oficialmente fora da cidade. A burocracia, dessa vez, entrega uma impossibilidade verificável.`,
+      clue: `um documento foi retirado oficialmente com assinatura de alguém comprovadamente ausente`,
+      evidenceDelta: 1,
+      lawfulnessDelta: 1,
+    }),
+  },
+  {
+    id: "offer-to-stop",
+    minPhase: 2,
+    condition: (s) => s.evidence >= 6,
+    run: () => ({
+      text: `Recebo uma proposta sem ameaça explícita: dinheiro suficiente para mudar de vida em troca de devolver cópias e esquecer nomes. O valor é alto demais para ser blefe e específico demais para vir de alguém que não conhece meu progresso.`,
+      pressureDelta: 4,
+      mystery: "Quem sabe exatamente quais provas eu possuo e quanto custaria tentar comprá-las?",
+      mood: "tension",
+    }),
+  },
+  {
+    id: "crimson-alignment",
+    minPhase: 3,
+    condition: (s) => s.occultExposure >= 4,
+    run: (start) => ({
+      text: `Sob a Lua Carmesim, três detalhes que eu tratava separadamente se alinham: horário, posição e símbolo. O desenho resultante aponta para ${start.nextLocation}, mas também sugere que o local é parte de algo repetido em escala maior.`,
+      clue: `horários, posições e símbolos formam um padrão que converge para ${start.nextLocation}`,
+      occultDelta: 1,
+      evidenceDelta: 1,
+      sanityDelta: -2,
+      mood: "discovery",
+    }),
+  },
+  {
+    id: "final-cleanup",
+    minPhase: 3,
+    condition: (s) => s.pressure >= 60,
+    run: (start) => ({
+      text: `A operação de limpeza começa antes do fim do caso. Arquivos são movidos, testemunhas recebem passagens e portas em ${start.nextLocation} ficam abertas apenas o tempo necessário para retirar caixas. A rede acredita que estou perto demais.`,
+      pressureDelta: 7,
+      clue: `a rede iniciou uma retirada coordenada de provas e pessoas em ${start.nextLocation}`,
+      mood: "tension",
+    }),
+  },
+];
+
 function normalizeText(input: string): string {
   return input
     .toLocaleLowerCase("pt-BR")
@@ -731,13 +1287,37 @@ export function interpretOfflineAction(action: string, ledger: LedgerData, start
   };
 }
 
+function normalizeCampaignSeed(value?: string): string {
+  const normalized = (value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]/g, "")
+    .slice(0, 32);
+  return normalized || "LOEN-DEFAULT";
+}
+
+function originSeedSignature(origin: GameOrigin): string {
+  const attrs = origin.attributes || { vigor: 1, destreza: 1, intelecto: 1, percepcao: 1, carisma: 1 };
+  return [
+    normalizeCampaignSeed(origin.campaignSeed),
+    origin.originType || "Pessoa Normal de Loen",
+    attrs.vigor,
+    attrs.destreza,
+    attrs.intelecto,
+    attrs.percepcao,
+    attrs.carisma,
+  ].join("|");
+}
+
 function baseState(origin: GameOrigin, start: OfflineStart): OfflineGameState {
+  const campaignSeed = normalizeCampaignSeed(origin.campaignSeed);
+  const seed = hashString(`${originSeedSignature(origin)}|engine-v3`);
   return {
-    engineVersion: 2,
+    engineVersion: 3,
     startId: start.id,
     turn: 0,
     phase: 0,
-    seed: hashString(`${origin.id}|${origin.playerName || "investigador"}|${Date.now()}`),
+    seed,
+    campaignSeed,
     pressure: 12,
     evidence: 0,
     trust: 0,
@@ -752,6 +1332,9 @@ function baseState(origin: GameOrigin, start: OfflineStart): OfflineGameState {
     visitedLocations: [start.location],
     npcTrust: {},
     playerCommitments: [],
+    eventHistory: [],
+    lastEventTurn: 0,
+    npcAgendas: initializeNpcAgendas(start, seed),
   };
 }
 
@@ -760,8 +1343,33 @@ function getStart(state?: OfflineGameState): OfflineStart {
 }
 
 function selectStart(origin: GameOrigin): OfflineStart {
-  const seed = hashString(`${origin.id}|${origin.playerName || ""}|${Date.now()}|start`);
+  // O nome do jogador não entra na seleção: mesma seed + mesma ficha = mesmo mundo inicial.
+  const seed = hashString(`${originSeedSignature(origin)}|start-v3`);
   return choose(STARTS, seed);
+}
+
+function upgradeOfflineState(origin: GameOrigin, previous: any, start: OfflineStart): OfflineGameState {
+  if (!previous) return baseState(origin, start);
+  const campaignSeed = normalizeCampaignSeed(previous.campaignSeed || origin.campaignSeed || `LEGACY-${Number(previous.seed || 0).toString(36)}`);
+  const seed = Number.isFinite(previous.seed) ? previous.seed : hashString(`${campaignSeed}|legacy-upgrade`);
+  return {
+    ...previous,
+    engineVersion: 3,
+    startId: previous.startId || start.id,
+    turn: previous.turn || 0,
+    phase: previous.phase || 0,
+    seed,
+    campaignSeed,
+    flags: [...(previous.flags || [])],
+    visitedLocations: [...(previous.visitedLocations || [start.location])],
+    npcTrust: { ...(previous.npcTrust || {}) },
+    playerCommitments: [...(previous.playerCommitments || [])],
+    eventHistory: [...(previous.eventHistory || [])],
+    lastEventTurn: previous.lastEventTurn || 0,
+    npcAgendas: previous.npcAgendas && Object.keys(previous.npcAgendas).length > 0
+      ? JSON.parse(JSON.stringify(previous.npcAgendas))
+      : initializeNpcAgendas(start, seed),
+  };
 }
 
 function formatTurn(scene: string, dialogue: string, status: string, dilemma: string): string {
@@ -842,7 +1450,7 @@ export function startOfflineChronicle(origin: GameOrigin, initialLedger: LedgerD
   const text = formatTurn(
     `Eu sou ${origin.playerName || "um desconhecido"}, ${start.role}. ${start.hook.charAt(0).toUpperCase()}${start.hook.slice(1)}. Tenho comigo ${start.object}. Antes que eu consiga organizar os pensamentos, noto que ${start.threat}.\n\nNão há explicação confortável. Ainda sou uma pessoa comum; tudo o que tenho são meus sentidos, minha experiência e a decisão de não ignorar o detalhe errado.`,
     `— Não devia estar olhando para isso — diz ${start.npc.name}, ${start.npc.role}. A voz tenta soar firme, mas não combina com ${start.npc.attitude}. — Se quiser sair daqui inteiro, esqueça o que viu.`,
-    `${start.location} | ${start.time} | Pressão: baixa, atenção indesejada começando a crescer`,
+    `${start.location} | ${start.time} | Seed: ${state.campaignSeed} | Pressão: baixa, atenção indesejada começando a crescer`,
     dilemmaText(options)
   );
 
@@ -872,6 +1480,193 @@ function sanityStatus(value: number): LedgerData["sanityStatus"] {
   if (value >= 50) return "Alerta";
   if (value >= 25) return "Perturbado";
   return "À Beira da Mutação";
+}
+
+function applyWorldEventResult(state: OfflineGameState, ledger: LedgerData, result: OfflineEventResult, reason: string) {
+  state.pressure = Math.max(0, Math.min(100, state.pressure + (result.pressureDelta || 0)));
+  state.evidence = Math.max(0, state.evidence + (result.evidenceDelta || 0));
+  state.trust = Math.max(-10, Math.min(10, state.trust + (result.trustDelta || 0)));
+  state.lawfulness += result.lawfulnessDelta || 0;
+  state.occultExposure = Math.max(0, state.occultExposure + (result.occultDelta || 0));
+
+  if (result.clue) ledger.clues = unique([...(ledger.clues || []), result.clue]);
+  if (result.mystery) ledger.mysteries = unique([...(ledger.mysteries || []), result.mystery]);
+  if (result.secret) ledger.secretsDiscovered = unique([...(ledger.secretsDiscovered || []), result.secret]);
+  if (result.sanityDelta) {
+    ledger.sanity = Math.max(0, Math.min(100, (ledger.sanity ?? 100) + result.sanityDelta));
+    ledger.sanityStatus = sanityStatus(ledger.sanity);
+    ledger.sanityHistory = [
+      ...(ledger.sanityHistory || []),
+      { reason, delta: result.sanityDelta, timestamp: Date.now() },
+    ];
+  }
+}
+
+function maybeIntermediateEvent(start: OfflineStart, state: OfflineGameState, ledger: LedgerData): OfflineEventResult | undefined {
+  if (state.turn < 2 || state.turn - state.lastEventTurn < 2) return undefined;
+  const elapsed = state.turn - state.lastEventTurn;
+  const triggerChance = elapsed >= 3 ? 1 : 0.72;
+  const triggerRoll = seeded01(hashString(`${state.seed}|event-trigger|${state.turn}|${state.route}|${state.evidence}|${state.pressure}`));
+  if (triggerRoll > triggerChance) return undefined;
+
+  const candidates = INTERMEDIATE_EVENTS.filter((event) => {
+    if (state.eventHistory.includes(event.id)) return false;
+    if (event.minTurn !== undefined && state.turn < event.minTurn) return false;
+    if (event.maxTurn !== undefined && state.turn > event.maxTurn) return false;
+    if (event.minPhase !== undefined && state.phase < event.minPhase) return false;
+    if (event.maxPhase !== undefined && state.phase > event.maxPhase) return false;
+    if (event.condition && !event.condition(state, ledger)) return false;
+    return true;
+  });
+  if (candidates.length === 0) return undefined;
+
+  const event = choose(candidates, hashString(`${state.seed}|event-pick|${state.turn}|${state.eventHistory.join(",")}`));
+  const result = event.run(start, state, ledger);
+  state.eventHistory = [...state.eventHistory, event.id];
+  state.lastEventTurn = state.turn;
+  applyWorldEventResult(state, ledger, result, `Evento intermediário: ${event.id}.`);
+  return result;
+}
+
+function agendaOutcome(agenda: OfflineNpcAgenda, start: OfflineStart, state: OfflineGameState, targeted: boolean): OfflineEventResult {
+  const targetReaction = targeted
+    ? "Minha interferência obriga o personagem a antecipar o próximo passo."
+    : "Como eu não o pressionei diretamente, ele teve espaço para agir por conta própria.";
+  const exposedNow = agenda.progress >= 3 && !agenda.exposed;
+  if (exposedNow) agenda.exposed = true;
+  const resolvedNow = agenda.progress >= 5;
+  if (resolvedNow) agenda.resolved = true;
+
+  let result: OfflineEventResult;
+  switch (agenda.goal) {
+    case "conceal-evidence":
+      result = {
+        text: `${agenda.npcName} se move antes de mim: um registro muda de lugar, uma gaveta aparece limpa demais e uma pessoa recebe instrução para não lembrar de um horário. ${targetReaction}`,
+        dialogue: targeted ? `— Está confundindo cautela com culpa — diz ${agenda.npcName}, sem explicar por que já sabia qual prova eu procuraria.` : undefined,
+        pressureDelta: 3 + agenda.urgency,
+        clue: exposedNow ? `${agenda.npcName} tentou apagar rastros específicos do caso, revelando que sabia quais provas eram perigosas` : undefined,
+        evidenceDelta: exposedNow ? 1 : 0,
+        mood: "tension",
+      };
+      break;
+    case "recover-object":
+      result = {
+        text: `${agenda.npcName} pergunta por ${start.object} através de terceiros e testa caminhos para recuperá-lo sem pedir diretamente. ${targetReaction}`,
+        dialogue: targeted ? `— Esse objeto não pertence a você — ${agenda.npcName} diz, rápido demais para fingir desinteresse.` : undefined,
+        pressureDelta: 2 + agenda.urgency,
+        clue: exposedNow ? `${agenda.npcName} demonstra interesse persistente em recuperar ${start.object}` : undefined,
+        evidenceDelta: exposedNow ? 1 : 0,
+      };
+      break;
+    case "sell-information":
+      result = {
+        text: `${agenda.npcName} começa a negociar versões diferentes da mesma história com pessoas diferentes. O objetivo não parece ser silêncio; parece ser descobrir quem paga mais pela informação. ${targetReaction}`,
+        dialogue: targeted ? `— Informação só é perigosa quando alguém finge que ela não tem preço.` : undefined,
+        pressureDelta: 2,
+        clue: exposedNow ? `${agenda.npcName} está oferecendo partes da investigação a compradores diferentes` : undefined,
+        evidenceDelta: exposedNow ? 1 : 0,
+      };
+      break;
+    case "seek-protection":
+      result = {
+        text: `${agenda.npcName} troca rotas, evita ficar sozinho e procura alguém que possa servir de escudo. Isso muda o comportamento de quem o observa. ${targetReaction}`,
+        dialogue: targeted ? `— Eu falo, mas não se me deixar sozinho depois.` : undefined,
+        trustDelta: targeted ? 1 : 0,
+        clue: exposedNow ? `${agenda.npcName} acredita estar em risco por causa do que sabe` : undefined,
+        mood: "mystery",
+      };
+      break;
+    case "flee-town":
+      result = {
+        text: `${agenda.npcName} converte dinheiro em algo portátil, pergunta horários de trem e para de voltar aos lugares de costume. ${targetReaction}`,
+        dialogue: targeted ? `— Às vezes a única resposta inteligente é estar em outra cidade antes do amanhecer.` : undefined,
+        pressureDelta: 2,
+        clue: exposedNow ? `${agenda.npcName} preparou uma rota de fuga e uma passagem sem data de retorno` : undefined,
+        evidenceDelta: exposedNow ? 1 : 0,
+      };
+      break;
+    case "test-player":
+      result = {
+        text: `${agenda.npcName} deixa uma informação parcialmente verdadeira ao meu alcance e observa não a pista, mas o que eu faço com ela. ${targetReaction}`,
+        dialogue: targeted ? `— Eu precisava saber se você corre atrás de qualquer coisa que brilhe.` : undefined,
+        pressureDelta: targeted ? 1 : 2,
+        clue: exposedNow ? `${agenda.npcName} plantou informação incompleta para medir minhas reações` : undefined,
+        evidenceDelta: exposedNow ? 1 : 0,
+      };
+      break;
+    case "alert-network":
+      result = {
+        text: `${agenda.npcName} envia um aviso por uma rota indireta. Pouco depois, pessoas que eu ainda não conhecia começam a agir como se soubessem meu nome e o alcance das minhas pistas. ${targetReaction}`,
+        pressureDelta: 5 + agenda.urgency,
+        clue: exposedNow ? `${agenda.npcName} mantém um canal para avisar uma rede maior sobre o avanço da investigação` : undefined,
+        mood: "tension",
+      };
+      break;
+    case "seek-authorities":
+      result = {
+        text: `${agenda.npcName} cria registro, testemunha e horário verificável para tudo que faz. Não é confiança na lei; é a tentativa de tornar um desaparecimento mais caro. ${targetReaction}`,
+        dialogue: targeted ? `— Se meu nome entrar em três livros diferentes, alguém vai precisar explicar se eu sumir.` : undefined,
+        lawfulnessDelta: 1,
+        trustDelta: targeted ? 1 : 0,
+        clue: exposedNow ? `${agenda.npcName} vem documentando os próprios passos por medo de ser silenciado` : undefined,
+      };
+      break;
+    case "frame-player":
+      result = {
+        text: `${agenda.npcName} espalha uma versão em que minhas perguntas precedem problemas que, na verdade, já estavam em curso. É uma inversão pequena, repetida até parecer causalidade. ${targetReaction}`,
+        pressureDelta: 5,
+        trustDelta: -1,
+        clue: exposedNow ? `${agenda.npcName} está construindo uma narrativa para me associar aos incidentes que investigo` : undefined,
+        mood: "tension",
+      };
+      break;
+    case "investigate-alone":
+    default:
+      result = {
+        text: `${agenda.npcName} segue uma linha de investigação sem me avisar e volta com informação que não poderia ter obtido ficando parado. ${targetReaction}`,
+        dialogue: targeted ? `— Você não é a única pessoa capaz de fazer perguntas.` : undefined,
+        evidenceDelta: targeted || exposedNow ? 1 : 0,
+        clue: exposedNow ? `${agenda.npcName} investigou por conta própria uma conexão com ${start.nextLocation}` : undefined,
+        mood: exposedNow ? "discovery" : "mystery",
+      };
+      break;
+  }
+
+  if (resolvedNow) {
+    result.text += ` A agenda chega a um ponto de ruptura: agora ela produz uma consequência que não pode mais ser tratada como simples intenção.`;
+    result.pressureDelta = (result.pressureDelta || 0) + 2;
+  }
+  return result;
+}
+
+function advanceNpcAgendas(start: OfflineStart, state: OfflineGameState, ledger: LedgerData, parsed: ParsedAction): OfflineEventResult | undefined {
+  const agendas = Object.values(state.npcAgendas || {}).filter((agenda) => !agenda.resolved);
+  const visibleAgendas = agendas.filter((agenda) => {
+    if (normalizeText(agenda.npcName) === normalizeText(start.secondNpc.name) && state.phase === 0) return false;
+    return state.turn >= agenda.nextActionTurn;
+  });
+  if (visibleAgendas.length === 0) return undefined;
+
+  const agenda = choose(visibleAgendas, hashString(`${state.seed}|agenda|${state.turn}|${state.route}`));
+  const targeted = parsed.target ? normalizeText(parsed.target) === normalizeText(agenda.npcName) : false;
+  const interferenceBonus = targeted && ["question", "persuade", "threaten", "follow", "protect"].includes(parsed.primary) ? 1 : 0;
+  agenda.progress += 1 + interferenceBonus;
+  agenda.nextActionTurn = state.turn + 2 + Math.floor(seeded01(hashString(`${state.seed}|${agenda.npcName}|next|${state.turn}`)) * 3);
+
+  const result = agendaOutcome(agenda, start, state, targeted);
+  const summary = `Turno ${state.turn}: agenda “${agendaLabel(agenda.goal)}” avançou para ${agenda.progress}/5${targeted ? " após interferência direta do jogador" : " enquanto o jogador estava focado em outra coisa"}.`;
+  agenda.history = [...agenda.history, summary].slice(-8);
+  state.npcAgendas[normalizeText(agenda.npcName)] = agenda;
+
+  upsertNpc(ledger, {
+    name: agenda.npcName,
+    role: agenda.role,
+    notes: agenda.exposed ? `Objetivo percebido: ${agendaLabel(agenda.goal)}.` : undefined,
+    conversationMemory: [summary],
+    lastLocationMet: ledger.location,
+  });
+  applyWorldEventResult(state, ledger, result, `Ação autônoma de ${agenda.npcName}.`);
+  return result;
 }
 
 function resolveAction(parsed: ParsedAction, origin: GameOrigin, state: OfflineGameState): { success: "strong" | "success" | "mixed" | "fail"; roll: number; difficulty: number } {
@@ -1175,7 +1970,7 @@ function endingTurn(origin: GameOrigin, state: OfflineGameState, ledger: LedgerD
   const finalText = formatTurn(
     `${end.epilogue(origin, state, ledger)}\n\nQuando penso no primeiro detalhe que me trouxe até aqui, ele parece pequeno demais para ter mudado tanta coisa. Ainda assim, foi exatamente assim que começou.`,
     `“Toda investigação termina duas vezes: quando encontramos uma resposta e quando decidimos o que fazer com ela.”`,
-    `${ledger.location} | Epílogo | Fim alcançado: ${end.title}`,
+    `${ledger.location} | Epílogo | Seed: ${state.campaignSeed} | Fim alcançado: ${end.title}`,
     `FIM — ${end.title}\n\nEsta crônica chegou a um dos ${ENDINGS.length} desfechos do Motor Local. Uma nova partida pode começar por outro dos ${STARTS.length} prólogos e seguir uma combinação diferente de consequências.`
   );
   ledger.offlineState = state;
@@ -1184,14 +1979,9 @@ function endingTurn(origin: GameOrigin, state: OfflineGameState, ledger: LedgerD
 
 export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger: LedgerData): OfflineTurnResult {
   const ledger = cloneLedger(currentLedger);
-  const previousState = (ledger.offlineState as OfflineGameState | undefined) || baseState(origin, selectStart(origin));
-  const state: OfflineGameState = {
-    ...previousState,
-    flags: [...(previousState.flags || [])],
-    visitedLocations: [...(previousState.visitedLocations || [])],
-    npcTrust: { ...(previousState.npcTrust || {}) },
-    playerCommitments: [...(previousState.playerCommitments || [])],
-  };
+  const rawPreviousState = ledger.offlineState as any;
+  const fallbackStart = getStart(rawPreviousState);
+  const state = upgradeOfflineState(origin, rawPreviousState, fallbackStart);
   const start = getStart(state);
   const parsed = interpretOfflineAction(action, ledger, start);
   const result = resolveAction(parsed, origin, state);
@@ -1285,24 +2075,40 @@ export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger
   const phaseEvent = phaseTransitionEvent(start, previousPhase, state, ledger);
   if (phaseEvent?.clue) ledger.clues = unique([...(ledger.clues || []), phaseEvent.clue]);
 
+  // O mundo continua se movendo sem esperar o jogador: eventos de ambiente e agendas de NPC
+  // são determinísticos pela seed, mas filtrados pelo estado atual da investigação.
+  const intermediateEvent = maybeIntermediateEvent(start, state, ledger);
+  const agendaEvent = advanceNpcAgendas(start, state, ledger, parsed);
+
   ledger.offlineState = state;
   const end = maybeEnding(origin, state, ledger);
   if (end) return endingTurn(origin, state, ledger, end);
 
   const options = localOptions(start, state);
   const statusPressure = state.pressure >= 75 ? "ameaça imediata" : state.pressure >= 45 ? "atenção hostil crescente" : "tensão controlável";
+  const sceneParts = [
+    consequence.scene,
+    phaseEvent?.text,
+    intermediateEvent?.text ? `EVENTO — ${intermediateEvent.text}` : undefined,
+    agendaEvent?.text ? `MOVIMENTO DE NPC — ${agendaEvent.text}` : undefined,
+  ].filter(Boolean);
+  const dialogueParts = [consequence.dialogue, intermediateEvent?.dialogue, agendaEvent?.dialogue].filter(Boolean);
+  const moods = [consequence.mood, intermediateEvent?.mood, agendaEvent?.mood].filter(Boolean) as AudioMood[];
+  const finalMood: AudioMood = moods.includes("tension") ? "tension" : moods.includes("discovery") ? "discovery" : moods.includes("mystery") ? "mystery" : "calm";
   const text = formatTurn(
-    `${consequence.scene}${phaseEvent ? `\n\n${phaseEvent.text}` : ""}`,
-    consequence.dialogue,
-    `${ledger.location} | ${ledger.timeAndWeather} | Evidências: ${state.evidence} | ${statusPressure}`,
+    sceneParts.join("\n\n"),
+    dialogueParts.join("\n\n") || consequence.dialogue,
+    `${ledger.location} | ${ledger.timeAndWeather} | Seed: ${state.campaignSeed} | Evidências: ${state.evidence} | Eventos: ${state.eventHistory.length} | ${statusPressure}`,
     dilemmaText(options)
   );
 
-  return { text, ledger, mood: consequence.mood, suggestedActions: options };
+  return { text, ledger, mood: finalMood, suggestedActions: options };
 }
 
 export const OFFLINE_ENGINE_STATS = {
   starts: STARTS.length,
   endings: ENDINGS.length,
   intents: Object.keys(INTENT_WORDS).length,
+  events: INTERMEDIATE_EVENTS.length,
+  agendas: NPC_AGENDA_GOALS.length,
 };

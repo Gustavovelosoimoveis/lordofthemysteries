@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { GameMode, GameOrigin } from "../types";
-import { Scroll, X, Shield, Brain, Activity, Eye, MessageSquare, Plus, Minus, Cpu, Sparkles } from "lucide-react";
+import { Scroll, X, Shield, Brain, Activity, Eye, MessageSquare, Plus, Minus, Cpu, Sparkles, RefreshCw, Hash } from "lucide-react";
 
 interface OriginSelectorModalProps {
   isOpen: boolean;
@@ -12,7 +12,7 @@ interface OriginSelectorModalProps {
   onUpdatePlayerName?: (name: string) => void;
   gameMode?: GameMode;
   onGameModeChange?: (mode: GameMode) => void;
-  offlineStats?: { starts: number; endings: number; intents: number };
+  offlineStats?: { starts: number; endings: number; intents: number; events?: number; agendas?: number };
 }
 
 type OriginOptions = "Pessoa Normal de Loen" | "Amnésico Humano" | "Transmigrado da Terra";
@@ -27,7 +27,7 @@ export const OriginSelectorModal: React.FC<OriginSelectorModalProps> = ({
   onUpdatePlayerName,
   gameMode = "offline",
   onGameModeChange,
-  offlineStats = { starts: 24, endings: 30, intents: 19 },
+  offlineStats = { starts: 24, endings: 30, intents: 19, events: 0, agendas: 0 },
 }) => {
   const [playerName, setPlayerName] = useState(currentOrigin?.playerName || "");
   const [gender, setGender] = useState(currentOrigin?.gender || "Masculino");
@@ -35,6 +35,8 @@ export const OriginSelectorModal: React.FC<OriginSelectorModalProps> = ({
     (currentOrigin?.originType as OriginOptions) || "Pessoa Normal de Loen"
   );
   const [earthProfession, setEarthProfession] = useState("");
+  const makeSeed = () => `LOEN-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  const [campaignSeed, setCampaignSeed] = useState(currentOrigin?.campaignSeed || makeSeed());
 
   const [attributes, setAttributes] = useState(
     currentOrigin?.attributes || {
@@ -45,6 +47,13 @@ export const OriginSelectorModal: React.FC<OriginSelectorModalProps> = ({
       carisma: 1,
     }
   );
+
+  // Cada nova crônica recebe uma seed nova por padrão; saves existentes preservam a seed original.
+  React.useEffect(() => {
+    if (isOpen && isInitial && !currentOrigin?.campaignSeed) {
+      setCampaignSeed(makeSeed());
+    }
+  }, [isOpen, isInitial, currentOrigin?.campaignSeed]);
 
   // Sync with currentOrigin if it changes
   React.useEffect(() => {
@@ -59,6 +68,9 @@ export const OriginSelectorModal: React.FC<OriginSelectorModalProps> = ({
     }
     if (currentOrigin?.originType) {
       setOriginType(currentOrigin.originType as OriginOptions);
+    }
+    if (currentOrigin?.campaignSeed) {
+      setCampaignSeed(currentOrigin.campaignSeed);
     }
   }, [currentOrigin]);
 
@@ -212,7 +224,8 @@ INSTRUÇÃO PARA O GAME MASTER: O jogador ACABOU de despertar. Ele é 100% munda
       playerName: playerName.trim(),
       gender: gender,
       originType: originType,
-      attributes: attributes
+      attributes: attributes,
+      campaignSeed: campaignSeed.trim().toUpperCase() || makeSeed(),
     };
 
     onSelectOrigin(newOrigin);
@@ -286,6 +299,41 @@ INSTRUÇÃO PARA O GAME MASTER: O jogador ACABOU de despertar. Ele é 100% munda
               </button>
             </div>
           </div>
+
+          {gameMode === "offline" && (
+            <div className="rounded-lg border border-[#35533f] bg-[#111a15] p-3 space-y-2 animate-fadeIn">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <label className="flex items-center gap-1.5 text-[11px] font-mono uppercase text-[#9fd0ad] font-bold">
+                    <Hash className="w-3.5 h-3.5" /> Seed da Crônica
+                  </label>
+                  <p className="mt-1 text-[10px] text-[#8fa195] font-serif leading-relaxed">
+                    Compartilhe esta seed. Com a mesma origem, atributos e seed, o Motor Local reproduz o mesmo prólogo e a mesma lógica de eventos; decisões diferentes criam ramificações diferentes.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCampaignSeed(makeSeed())}
+                  className="shrink-0 p-2 rounded border border-[#456b52] bg-[#18231d] text-[#9fd0ad] hover:text-[#d7f3df] hover:border-[#6b9b79] transition-colors"
+                  title="Gerar outra seed"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+              </div>
+              <input
+                type="text"
+                value={campaignSeed}
+                onChange={(e) => setCampaignSeed(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 32))}
+                placeholder="Ex: CRIMSON-17"
+                className="w-full px-3 py-2 rounded bg-[#0d1510] border border-[#35533f] text-sm font-mono tracking-wider text-[#cce8d4] focus:outline-none focus:border-[#6b9b79]"
+              />
+              {(offlineStats.events || offlineStats.agendas) ? (
+                <div className="text-[9px] font-mono uppercase tracking-wide text-[#71877a]">
+                  {offlineStats.events || 0} eventos intermediários · {offlineStats.agendas || 0} agendas autônomas de NPC
+                </div>
+              ) : null}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>

@@ -865,6 +865,9 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
   const handleExportMarkdown = () => {
     let md = `# LORD OF THE MYSTERIES - CRÔNICA EM 1ª PESSOA\n`;
     md += `*Período: ${origin?.year || "c. 1342"} | Local de Início: ${origin?.location || "Backlund"}*\n\n`;
+    if (ledger.offlineState?.campaignSeed) {
+      md += `*Seed da Crônica: \`${ledger.offlineState.campaignSeed}\`*\n\n`;
+    }
     md += `---\n\n`;
 
     for (const msg of messages) {
@@ -977,6 +980,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
         userMuted={userMuted}
         onToggleUserMute={handleToggleUserMute}
         gameMode={gameMode}
+        campaignSeed={origin?.campaignSeed || ledger.offlineState?.campaignSeed}
       />
 
       {/* Main Narrative Scroll Area ("A TELA CLEAN") */}

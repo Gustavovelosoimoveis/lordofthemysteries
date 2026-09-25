@@ -37,6 +37,7 @@ interface HeaderProps {
   userMuted?: boolean;
   onToggleUserMute?: () => void;
   gameMode?: GameMode;
+  campaignSeed?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -56,6 +57,7 @@ export const Header: React.FC<HeaderProps> = ({
   userMuted = false,
   onToggleUserMute,
   gameMode = "ai",
+  campaignSeed,
 }) => {
   const [isPlayingAudio, setIsPlayingAudio] = useState(audioEngine.isPlaying());
   const [volume, setVolume] = useState(audioEngine.getVolume());
@@ -172,6 +174,16 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 {gameMode === "offline" ? "Local · Sem API" : "IA"}
               </span>
+              {gameMode === "offline" && campaignSeed && (
+                <button
+                  type="button"
+                  onClick={() => navigator.clipboard?.writeText(campaignSeed)}
+                  className="hidden md:inline-flex items-center px-1.5 py-0.5 rounded border border-[#33483a] bg-[#0f1712] text-[9px] font-mono tracking-wider text-[#789887] hover:text-[#b8dfc4] hover:border-[#527461] transition-colors"
+                  title={`Seed da crônica: ${campaignSeed}. Clique para copiar.`}
+                >
+                  Seed {campaignSeed}
+                </button>
+              )}
 
               {/* Prominent Investigator Badge */}
               <button

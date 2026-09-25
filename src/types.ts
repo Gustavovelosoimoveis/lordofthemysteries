@@ -69,6 +69,8 @@ export interface GameOrigin {
   playerName?: string;
   gender?: string;
   suggestedPathway?: string;
+  /** Seed compartilhável usada pelo Motor Local para reproduzir a mesma crônica-base. */
+  campaignSeed?: string;
   originType?: "Transmigrado da Terra" | "Amnésico Humano" | "Pessoa Normal de Loen";
   attributes?: {
     vigor: number;
