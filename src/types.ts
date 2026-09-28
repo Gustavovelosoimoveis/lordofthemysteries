@@ -56,6 +56,8 @@ export interface LedgerData {
   discoveredPathways?: string[]; 
   /** Estado serializável do Motor Local. Mantido opcional para compatibilidade com saves antigos/IA. */
   offlineState?: import("./utils/offlineEngine").OfflineGameState;
+  /** Simulação persistente do mundo da V4: relógio, clima, facções e acontecimentos fora da tela. */
+  worldState?: import("./game/worldSimulation").WorldSimulationState;
 }
 
 export interface GameOrigin {

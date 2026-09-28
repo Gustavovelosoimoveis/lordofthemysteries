@@ -7,7 +7,9 @@ import { Header } from "./components/Header";
 import { TurnView } from "./components/TurnView";
 import { ActionBar } from "./components/ActionBar";
 import { audioEngine } from "./utils/audioEngine";
-import { OFFLINE_ENGINE_STATS, runOfflineTurn, startOfflineChronicle } from "./utils/offlineEngine";
+import { CinematicStage } from "./components/CinematicStage";
+import { deriveSceneVisualState } from "./game/sceneDirector";
+import { LOCAL_RUNTIME_STATS, runLocalRuntimeTurn, startLocalRuntime } from "./game/gameRuntime";
 import { Scroll, AlertCircle, RefreshCw, Sparkles, Compass, Feather, BookOpen, ShieldAlert } from "lucide-react";
 
 // Modais carregados sob demanda (lazy) — não pesam no carregamento inicial da tela de narrativa
@@ -259,6 +261,10 @@ export default function App() {
   );
   const currentStatusString = latestAssistantMessage?.parsed?.worldStatus || ledger.timeAndWeather || "";
   const ambientMood = getAmbientMood(currentStatusString);
+  const currentScene = useMemo(
+    () => deriveSceneVisualState(latestAssistantMessage, ledger, ledger.worldState),
+    [latestAssistantMessage, ledger]
+  );
 
   // Helper to serialize ledger for GM prompt context (ensures absolute memory of NPCs)
   const serializeLedgerContext = (l: LedgerData) => {
@@ -325,7 +331,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
     // MOTOR LOCAL: nenhuma requisição HTTP, nenhuma API key e nenhuma IA externa.
     if (gameMode === "offline") {
       try {
-        const localResult = startOfflineChronicle(selected, initialLedger);
+        const localResult = startLocalRuntime(selected, initialLedger);
         const localOrigin = { ...selected, location: localResult.ledger.location };
         setOrigin(localOrigin);
         setLedger(localResult.ledger);
@@ -445,7 +451,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
     if (gameMode === "offline") {
       setIsLoading(true);
       try {
-        const localResult = runOfflineTurn(actionText, origin, ledger);
+        const localResult = runLocalRuntimeTurn(actionText, origin, ledger);
         audioEngine.setMood(localResult.mood);
         setLedger(localResult.ledger);
         setMessages([
@@ -984,7 +990,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
       />
 
       {/* Main Narrative Scroll Area ("A TELA CLEAN") */}
-      <main className="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col justify-between relative overflow-hidden">
+      <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col justify-between relative overflow-hidden">
         {/* Efeito visual sutil de nevoeiro vitoriano com máscara de opacidade animada */}
         <div className="victorian-fog-container" aria-hidden="true">
           <div className="victorian-fog-billow-1" />
@@ -1065,13 +1071,15 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
             <div className="pt-2 flex items-center gap-4 text-[11px] font-mono text-[#786e5e]">
               <span>22 Sequências 9 Canônicas</span>
               <span>•</span>
-              <span>{OFFLINE_ENGINE_STATS.starts} Inícios Locais</span>
+              <span>{LOCAL_RUNTIME_STATS.starts} Inícios Locais</span>
               <span>•</span>
-              <span>{OFFLINE_ENGINE_STATS.endings} Finais</span>
+              <span>{LOCAL_RUNTIME_STATS.endings} Finais</span>
             </div>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-5">
+            <CinematicStage scene={currentScene} world={ledger.worldState} sanity={sanityVal} />
+            <div className="max-w-4xl mx-auto space-y-4">
             {messages.map((message, index) => (
               <TurnView
                 key={message.id || index}
@@ -1086,6 +1094,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
               />
             ))}
             <div ref={turnsEndRef} />
+            </div>
           </div>
         )}
       </main>
@@ -1150,7 +1159,7 @@ Mistérios e Conflitos Ativos: ${(l.mysteries || []).join("; ") || "Nenhum"}`;
         onUpdatePlayerName={handleUpdatePlayerName}
         gameMode={gameMode}
         onGameModeChange={setGameMode}
-        offlineStats={OFFLINE_ENGINE_STATS}
+        offlineStats={LOCAL_RUNTIME_STATS}
       />
 
       {/* Lore Guide Modal */}

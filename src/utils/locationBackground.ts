@@ -23,10 +23,10 @@ export function getLocationSceneKey(text: string): LocationSceneKey {
   if (/doca|cais|porto|navio|embarca/.test(t)) return "docas";
   if (/beco|viela|beco sem saída/.test(t)) return "beco";
   if (/quarto|sótão|aposento|dormitório|cama\b/.test(t)) return "quarto";
-  if (/biblioteca|arquivo|estante|livraria/.test(t)) return "biblioteca";
+  if (/biblioteca|arquivo|estante|livraria|universidade|sala de leitura/.test(t)) return "biblioteca";
   if (/taverna|bar\b|pub\b|salão de bebidas/.test(t)) return "taverna";
-  if (/escritório|gabinete|sala de investigação|mesa de trabalho/.test(t)) return "escritorio";
-  if (/loja|vitrine|comércio|mercearia/.test(t)) return "comercio";
+  if (/escritório|gabinete|sala de investigação|mesa de trabalho|cartório|tribunal|repartição|alfândega|delegacia|secretaria|registro público/.test(t)) return "escritorio";
+  if (/loja|vitrine|comércio|mercearia|oficina|boticário|boticária|farmácia|mercado/.test(t)) return "comercio";
   if (/catedral|praça|igreja|escadaria/.test(t)) return "praca";
   if (/rua|avenida|calçada|distrito/.test(t)) return "rua";
 
