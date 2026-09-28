@@ -56,8 +56,10 @@ export interface LedgerData {
   discoveredPathways?: string[]; 
   /** Estado serializável do Motor Local. Mantido opcional para compatibilidade com saves antigos/IA. */
   offlineState?: import("./utils/offlineEngine").OfflineGameState;
-  /** Simulação persistente do mundo da V4: relógio, clima, facções e acontecimentos fora da tela. */
+  /** Simulação persistente do mundo da V4: relógio, clima, facções, NPCs e acontecimentos fora da tela. */
   worldState?: import("./game/worldSimulation").WorldSimulationState;
+  /** V4.1: malha de histórias do mesmo mundo. Preparada para receber sinais de outros jogadores no online. */
+  sharedStoryState?: import("./game/sharedStoryWorld").SharedStoryWorldState;
 }
 
 export interface GameOrigin {
@@ -71,8 +73,12 @@ export interface GameOrigin {
   playerName?: string;
   gender?: string;
   suggestedPathway?: string;
-  /** Seed compartilhável usada pelo Motor Local para reproduzir a mesma crônica-base. */
+  /** Seed da crônica individual. Escolhe a história/corpo em Loen, nunca a formação da Terra. */
   campaignSeed?: string;
+  /** Seed do mundo compartilhado. No offline, cai para campaignSeed; no online vários personagens poderão compartilhar este valor. */
+  worldSeed?: string;
+  /** Identidade persistente do personagem para sincronização futura de eventos online. */
+  characterId?: string;
   originType?: "Transmigrado da Terra" | "Amnésico Humano" | "Pessoa Normal de Loen";
   /** Formação, profissão ou conhecimentos declarados pelo jogador antes da transmigração. */
   earthBackground?: string;

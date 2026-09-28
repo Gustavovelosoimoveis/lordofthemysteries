@@ -1269,42 +1269,6 @@ function inferOriginTags(origin: GameOrigin): OriginExpertiseTag[] {
   return unique(tags);
 }
 
-const START_AFFINITIES: Record<string, OriginExpertiseTag[]> = {
-  "iron-cross-room": ["academic", "investigative"],
-  "khoy-archive": ["academic", "occult-studies", "investigative"],
-  "tussock-crate": ["maritime", "investigative"],
-  "east-district-apothecary": ["medical", "occult-studies"],
-  "st-george-coffin": ["medical", "occult-studies"],
-  "hillston-bookshop": ["academic", "occult-studies"],
-  "bridge-club": ["social", "investigative"],
-  "joewood-ledger": ["legal", "commercial", "investigative"],
-  "north-factory": ["technical", "investigative"],
-  "empress-heirloom": ["social", "investigative", "occult-studies"],
-  "pritz-manifest": ["legal", "commercial", "maritime", "investigative"],
-  "pritz-smugglers": ["maritime", "investigative"],
-  "conot-mine": ["technical", "investigative"],
-  "bayam-incense": ["social", "occult-studies"],
-  "bayam-diver": ["maritime", "investigative"],
-  "trier-clockwork": ["technical", "investigative"],
-  "trier-river": ["journalistic", "investigative"],
-  "backlund-morgue": ["medical", "investigative", "occult-studies"],
-  "court-testament": ["legal", "academic", "investigative", "occult-studies"],
-  "tram-ticket": ["investigative", "social"],
-  "newspaper-proof": ["journalistic", "academic", "investigative"],
-  "theatre-mask": ["social", "occult-studies"],
-  "hospital-ward": ["medical", "social", "occult-studies"],
-  "canal-photograph": ["technical", "investigative"],
-  "police-evidence": ["legal", "investigative"],
-  "church-donation": ["occult-studies", "social", "academic"],
-};
-
-function startAffinity(start: OfflineStart, tags: OriginExpertiseTag[]): number {
-  if (!tags.length) return 0;
-  const affinities = START_AFFINITIES[start.id] || [];
-  return tags.reduce((score, tag) => score + (affinities.includes(tag) ? (tag === "legal" || tag === "occult-studies" ? 3 : 2) : 0), 0);
-}
-
-
 function storyArc(start: OfflineStart): OfflineStoryArc {
   return OFFLINE_STORY_ARCS[start.id] || {
     opening: `O incidente em ${start.location} começa pequeno e imediatamente errado.`,
@@ -1538,17 +1502,9 @@ function normalizeCampaignSeed(value?: string): string {
 }
 
 function originSeedSignature(origin: GameOrigin): string {
-  const attrs = origin.attributes || { vigor: 1, destreza: 1, intelecto: 1, percepcao: 1, carisma: 1 };
-  return [
-    normalizeCampaignSeed(origin.campaignSeed),
-    origin.originType || "Pessoa Normal de Loen",
-    normalizeText(earthBackground(origin)),
-    attrs.vigor,
-    attrs.destreza,
-    attrs.intelecto,
-    attrs.percepcao,
-    attrs.carisma,
-  ].join("|");
+  // Regra V4.1: o passado na Terra e os atributos NÃO escolhem história, corpo ou eventos.
+  // Eles entram apenas como conhecimento/competência na resolução das ações.
+  return normalizeCampaignSeed(origin.campaignSeed);
 }
 
 function baseState(origin: GameOrigin, start: OfflineStart): OfflineGameState {
@@ -1601,27 +1557,12 @@ function getStart(state?: OfflineGameState): OfflineStart {
 }
 
 function selectStart(origin: GameOrigin): OfflineStart {
-  // A seed continua determinística, mas o passado declarado agora influencia quais prólogos fazem sentido.
-  // Um estudante de Direito e misticismo, por exemplo, tende a acordar em corpos/cenários com afinidade
-  // documental, jurídica, acadêmica ou ocultista — sem transformar o passado da Terra em poderes de Loen.
-  const seed = hashString(`${originSeedSignature(origin)}|start-v3.1-origin-aware`);
-  const tags = inferOriginTags(origin);
-  if (!tags.length || origin.originType !== "Transmigrado da Terra") return choose(STARTS, seed);
-
-  const scored = STARTS.map((start) => ({ start, score: startAffinity(start, tags) }))
-    .filter((entry) => entry.score > 0);
-  if (!scored.length) return choose(STARTS, seed);
-
-  // Sorteio determinístico ponderado: a ficha influencia muito, mas não aprisiona o jogador
-  // a um único prólogo. Afinidades fortes aparecem mais; outras compatíveis continuam possíveis.
-  const weighted = scored.map((entry) => ({ ...entry, weight: Math.pow(entry.score + 1, 2) }));
-  const totalWeight = weighted.reduce((sum, entry) => sum + entry.weight, 0);
-  let cursor = seeded01(seed) * totalWeight;
-  for (const entry of weighted) {
-    cursor -= entry.weight;
-    if (cursor <= 0) return entry.start;
-  }
-  return weighted[weighted.length - 1].start;
+  // História e corpo em Loen são escolhidos apenas pela seed da crônica.
+  // Formação terrestre, origem (transmigrado/nativo/amnesico) e atributos NÃO enviesam o prólogo.
+  // Assim, "estudante de Direito" pode acordar como estivador, copista, paciente, vigia etc.;
+  // o Direito só muda o que ele percebe/entende e como certas ações são resolvidas.
+  const seed = hashString(`${normalizeCampaignSeed(origin.campaignSeed)}|start-v4.1-independent`);
+  return choose(STARTS, seed);
 }
 
 function upgradeOfflineState(origin: GameOrigin, previous: any, start: OfflineStart): OfflineGameState {

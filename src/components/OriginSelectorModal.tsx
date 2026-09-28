@@ -213,6 +213,9 @@ Atributos RPG (Mín 1, Máx 10): [VIGOR: ${attributes.vigor} | DESTREZA: ${attri
 
 INSTRUÇÃO PARA O GAME MASTER: O jogador ACABOU de despertar. Ele é 100% mundano, NÃO tem poção, e NÃO sabe nada sobre magias ou "Beyonders". NUNCA faça perguntas como "o que você fazia antes?". O jogo já começou. Exija que as ações dele dependam dos Atributos acima. Narre a cena inicial assustadora/misteriosa em 1ª pessoa no formato obrigatório [CENA], [DIÁLOGO] e [STATUS DO MUNDO] e termine com um dilema tenso.`;
 
+    const localCharacterId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const normalizedSeed = campaignSeed.trim().toUpperCase() || makeSeed();
+
     const newOrigin: GameOrigin = {
       id: "custom-" + Date.now(),
       title: `${playerName.trim()} (${originType})`,
@@ -226,7 +229,11 @@ INSTRUÇÃO PARA O GAME MASTER: O jogador ACABOU de despertar. Ele é 100% munda
       originType: originType,
       earthBackground: originType === "Transmigrado da Terra" ? earthProfession.trim() : undefined,
       attributes: attributes,
-      campaignSeed: campaignSeed.trim().toUpperCase() || makeSeed(),
+      campaignSeed: normalizedSeed,
+      // Offline usa a mesma seed como mundo. No online, o servidor poderá atribuir um worldSeed
+      // compartilhado a vários personagens sem alterar a crônica individual de cada um.
+      worldSeed: normalizedSeed,
+      characterId: localCharacterId,
     };
 
     onSelectOrigin(newOrigin);
@@ -309,7 +316,7 @@ INSTRUÇÃO PARA O GAME MASTER: O jogador ACABOU de despertar. Ele é 100% munda
                     <Hash className="w-3.5 h-3.5" /> Seed da Crônica
                   </label>
                   <p className="mt-1 text-[10px] text-[#8fa195] font-serif leading-relaxed">
-                    Compartilhe esta seed. Com a mesma origem, atributos e seed, o Motor Local reproduz o mesmo prólogo e a mesma lógica de eventos; decisões diferentes criam ramificações diferentes.
+                    A seed define a crônica e o corpo/situação inicial em Loen. Sua profissão na Terra e seus atributos não escolhem o prólogo: eles só mudam conhecimentos, opções e resultados. Decisões diferentes criam ramificações diferentes.
                   </p>
                 </div>
                 <button

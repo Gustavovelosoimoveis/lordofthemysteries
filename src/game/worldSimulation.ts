@@ -1,7 +1,8 @@
-import type { GameOrigin, LedgerData } from "../types";
+import type { GameOrigin, LedgerData, NPCRecord } from "../types";
 
 export type WorldWeather = "fog" | "drizzle" | "rain" | "storm" | "smog" | "clear";
 export type FactionId = "authorities" | "church" | "press" | "underworld" | "occult-network";
+export type WorldNpcStatus = "active" | "hidden" | "missing" | "injured" | "dead" | "left-city";
 
 export interface WorldFactionState {
   id: FactionId;
@@ -20,10 +21,39 @@ export interface WorldEvent {
   detail: string;
   location?: string;
   tone: "neutral" | "ominous" | "urgent" | "quiet";
+  source?: "faction" | "npc" | "story" | "schedule" | "system";
+  sourceId?: string;
+}
+
+export interface WorldNpcAgent {
+  id: string;
+  name: string;
+  role?: string;
+  location: string;
+  status: WorldNpcStatus;
+  agenda?: string;
+  urgency: number;
+  exposure: number;
+  lastMoveTurn: number;
+  nextMoveTurn: number;
+  lastAction?: string;
+}
+
+export interface WorldScheduledEvent {
+  id: string;
+  title: string;
+  detail: string;
+  location: string;
+  dueTick: number;
+  expiresTick: number;
+  status: "pending" | "triggered" | "missed";
+  announced?: boolean;
+  npcId?: string;
 }
 
 export interface WorldSimulationState {
-  version: 1;
+  /** v1 saves são atualizados automaticamente para v2 no próximo turno. */
+  version: 1 | 2;
   tick: number;
   day: number;
   minuteOfDay: number;
@@ -33,10 +63,16 @@ export interface WorldSimulationState {
   occultNoise: number;
   factions: Record<FactionId, WorldFactionState>;
   recentEvents: WorldEvent[];
+  npcAgents?: Record<string, WorldNpcAgent>;
+  scheduledEvents?: WorldScheduledEvent[];
   lastPlayerAction?: string;
 }
 
 const clamp = (value: number, min = 0, max = 100) => Math.max(min, Math.min(max, Math.round(value)));
+
+function normalizeText(input: string): string {
+  return input.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s'-]/g, " ").replace(/\s+/g, " ").trim();
+}
 
 function hashString(input: string): number {
   let h = 2166136261 >>> 0;
@@ -93,23 +129,93 @@ function baseFactions(): Record<FactionId, WorldFactionState> {
 }
 
 function campaignKey(origin: GameOrigin, ledger: LedgerData): string {
-  return ledger.offlineState?.campaignSeed || origin.campaignSeed || origin.id || "LOEN";
+  // A simulação urbana pertence ao mundo. No futuro online, vários personagens podem compartilhar worldSeed.
+  return origin.worldSeed || ledger.sharedStoryState?.worldId || ledger.offlineState?.campaignSeed || origin.campaignSeed || origin.id || "LOEN";
 }
 
-export function initializeWorldSimulation(origin: GameOrigin, ledger: LedgerData): WorldSimulationState {
+function npcId(name: string): string {
+  return normalizeText(name).replace(/\s+/g, "-") || `npc-${hashString(name).toString(36)}`;
+}
+
+function agendaForNpc(ledger: LedgerData, name: string): { goal?: string; urgency?: number } {
+  const agendas = ledger.offlineState?.npcAgendas || {};
+  const normalized = normalizeText(name);
+  const found = Object.values(agendas).find((agenda) => normalizeText(agenda.npcName) === normalized);
+  return found ? { goal: found.goal, urgency: found.urgency } : {};
+}
+
+function agentFromRecord(npc: NPCRecord, ledger: LedgerData, key: string): WorldNpcAgent {
+  const agenda = agendaForNpc(ledger, npc.name);
+  const id = npcId(npc.name);
+  return {
+    id,
+    name: npc.name,
+    role: npc.role,
+    location: npc.lastLocationMet || ledger.location || "local desconhecido",
+    status: "active",
+    agenda: agenda.goal,
+    urgency: clamp((agenda.urgency || 2) * 12, 8, 88),
+    exposure: 8,
+    lastMoveTurn: 0,
+    nextMoveTurn: 2 + Math.floor(seeded01(`${key}:npc:${id}:first`) * 3),
+  };
+}
+
+function initializeNpcAgents(ledger: LedgerData, key: string): Record<string, WorldNpcAgent> {
+  const agents: Record<string, WorldNpcAgent> = {};
+  for (const npc of ledger.npcs || []) {
+    const agent = agentFromRecord(npc, ledger, key);
+    agents[agent.id] = agent;
+  }
+  // Alguns NPCs do motor local podem ainda não ter sido exibidos no diário. Mantemos agentes mínimos para eles.
+  for (const agenda of Object.values(ledger.offlineState?.npcAgendas || {})) {
+    const id = npcId(agenda.npcName);
+    if (agents[id]) continue;
+    agents[id] = {
+      id,
+      name: agenda.npcName,
+      role: agenda.role,
+      location: ledger.location || "local desconhecido",
+      status: "active",
+      agenda: agenda.goal,
+      urgency: clamp((agenda.urgency || 2) * 12, 8, 88),
+      exposure: 8,
+      lastMoveTurn: 0,
+      nextMoveTurn: 2 + Math.floor(seeded01(`${key}:npc:${id}:first`) * 3),
+    };
+  }
+  return agents;
+}
+
+function syncNpcAgents(existing: Record<string, WorldNpcAgent>, ledger: LedgerData, key: string): Record<string, WorldNpcAgent> {
+  const agents = Object.fromEntries(Object.entries(existing).map(([id, agent]) => [id, { ...agent }]));
+  for (const npc of ledger.npcs || []) {
+    const id = npcId(npc.name);
+    const agenda = agendaForNpc(ledger, npc.name);
+    if (!agents[id]) {
+      agents[id] = agentFromRecord(npc, ledger, key);
+      continue;
+    }
+    agents[id].role ||= npc.role;
+    agents[id].agenda ||= agenda.goal;
+    if (agenda.urgency) agents[id].urgency = Math.max(agents[id].urgency, clamp(agenda.urgency * 12));
+  }
+  return agents;
+}
+
+function baseWorld(origin: GameOrigin, ledger: LedgerData): WorldSimulationState {
   const key = campaignKey(origin, ledger);
   const minuteFromStatus = parseMinuteOfDay(ledger.timeAndWeather);
   const initialMinute = minuteFromStatus ?? Math.floor(seeded01(`${key}:clock`) * 24 * 60);
   const weather = inferWeather(`${ledger.timeAndWeather || ""} ${ledger.location || ""}`);
   const factions = baseFactions();
-
   const occult = ledger.offlineState?.occultExposure || 0;
   const pressure = ledger.offlineState?.pressure || 0;
   factions["occult-network"].awareness = clamp(occult * 1.4);
   factions.authorities.awareness = clamp(pressure * 0.65);
 
   return {
-    version: 1,
+    version: 2,
     tick: 0,
     day: 1,
     minuteOfDay: initialMinute,
@@ -119,6 +225,25 @@ export function initializeWorldSimulation(origin: GameOrigin, ledger: LedgerData
     occultNoise: clamp(occult * 1.35),
     factions,
     recentEvents: [],
+    npcAgents: initializeNpcAgents(ledger, key),
+    scheduledEvents: [],
+  };
+}
+
+export function initializeWorldSimulation(origin: GameOrigin, ledger: LedgerData): WorldSimulationState {
+  return baseWorld(origin, ledger);
+}
+
+function upgradeWorld(previous: WorldSimulationState | undefined, origin: GameOrigin, ledger: LedgerData): WorldSimulationState {
+  if (!previous) return baseWorld(origin, ledger);
+  const key = campaignKey(origin, ledger);
+  return {
+    ...previous,
+    version: 2,
+    factions: previous.factions || baseFactions(),
+    recentEvents: [...(previous.recentEvents || [])],
+    npcAgents: syncNpcAgents(previous.npcAgents || {}, ledger, key),
+    scheduledEvents: (previous.scheduledEvents || []).map((event) => ({ ...event })),
   };
 }
 
@@ -197,6 +322,8 @@ function factionMove(
     detail: move.detail,
     location,
     tone: move.tone,
+    source: "faction",
+    sourceId: id,
   };
 
   return {
@@ -210,13 +337,142 @@ function factionMove(
   };
 }
 
+function targetLocationForAgenda(agent: WorldNpcAgent, ledger: LedgerData, key: string, turn: number): string {
+  const visited = ledger.offlineState?.visitedLocations?.filter(Boolean) || [];
+  const known = [...new Set([ledger.location, ...visited].filter(Boolean))];
+  switch (agent.agenda) {
+    case "seek-authorities": return "delegacia ou repartição das autoridades";
+    case "seek-protection": return "santuário ou igreja do distrito";
+    case "flee-town": return "estação, porto ou estrada para fora da cidade";
+    case "alert-network": return "ponto de contato da rede oculta";
+    case "conceal-evidence": return "arquivo secundário fora da rota habitual";
+    case "recover-object": return ledger.location || agent.location;
+    default: return known.length ? choose(known, `${key}:npc-location:${agent.id}:${turn}`) : agent.location;
+  }
+}
+
+function maybeScheduleNpcMeeting(
+  agent: WorldNpcAgent,
+  schedules: WorldScheduledEvent[],
+  ledger: LedgerData,
+  key: string,
+  turn: number
+) {
+  if (!agent.agenda || !["sell-information", "seek-protection", "test-player", "seek-authorities"].includes(agent.agenda)) return;
+  if (schedules.some((event) => event.npcId === agent.id && event.status === "pending")) return;
+  if (seeded01(`${key}:meeting:${agent.id}:${turn}`) > 0.31) return;
+  const visited = ledger.offlineState?.visitedLocations?.filter(Boolean) || [];
+  const location = visited.length ? choose(visited, `${key}:meeting-location:${agent.id}:${turn}`) : ledger.location;
+  schedules.push({
+    id: `meeting:${agent.id}:${turn}`,
+    title: `Recado de ${agent.name}`,
+    detail: `${agent.name} deixou um encontro marcado e não explicou por que não podia falar imediatamente.`,
+    location: location || agent.location,
+    dueTick: turn + 1,
+    expiresTick: turn + 3,
+    status: "pending",
+    npcId: agent.id,
+  });
+}
+
+function advanceNpcAgents(
+  agents: Record<string, WorldNpcAgent>,
+  schedules: WorldScheduledEvent[],
+  ledger: LedgerData,
+  key: string,
+  turn: number,
+  cityPressure: number,
+  occultHostility: number
+): { agents: Record<string, WorldNpcAgent>; events: WorldEvent[] } {
+  const next = Object.fromEntries(Object.entries(agents).map(([id, agent]) => [id, { ...agent }]));
+  const events: WorldEvent[] = [];
+
+  for (const agent of Object.values(next)) {
+    if (["dead", "left-city"].includes(agent.status) || turn < agent.nextMoveTurn) continue;
+    const roll = seeded01(`${key}:npc-move:${agent.id}:${turn}`);
+    const target = targetLocationForAgenda(agent, ledger, key, turn);
+    agent.lastMoveTurn = turn;
+    agent.nextMoveTurn = turn + 2 + Math.floor(seeded01(`${key}:npc-next:${agent.id}:${turn}`) * 4);
+    agent.exposure = clamp(agent.exposure + cityPressure * 0.035 + occultHostility * 0.025);
+
+    if (agent.agenda === "flee-town" && roll > 0.42) {
+      agent.status = "left-city";
+      agent.location = target;
+      agent.lastAction = "deixou a cidade";
+      events.push({ id: `npc:${agent.id}:left:${turn}`, turn, title: "Uma cadeira vazia", detail: `${agent.name} deixou a cidade antes que alguém pudesse impedi-lo.`, location: target, tone: "urgent", source: "npc", sourceId: agent.id });
+      continue;
+    }
+
+    const lethalWindow = cityPressure >= 86 && occultHostility >= 74 && agent.exposure >= 66;
+    if (lethalWindow && roll < 0.025) {
+      agent.status = "dead";
+      agent.location = target;
+      agent.lastAction = "foi encontrado morto enquanto seguia a própria agenda";
+      events.push({ id: `npc:${agent.id}:dead:${turn}`, turn, title: "Uma linha foi cortada", detail: `${agent.name} foi encontrado morto. A história não esperou o jogador chegar.`, location: target, tone: "urgent", source: "npc", sourceId: agent.id });
+      continue;
+    }
+    if (agent.exposure >= 55 && roll < 0.14) {
+      agent.status = "missing";
+      agent.location = target;
+      agent.lastAction = "desapareceu da rotina conhecida";
+      events.push({ id: `npc:${agent.id}:missing:${turn}`, turn, title: "Ninguém sabe onde está", detail: `${agent.name} desapareceu da rotina conhecida. O motivo ainda não é claro.`, location: target, tone: "ominous", source: "npc", sourceId: agent.id });
+      continue;
+    }
+
+    agent.status = agent.agenda === "conceal-evidence" || agent.agenda === "alert-network" ? "hidden" : "active";
+    agent.location = target;
+    agent.lastAction = agent.agenda ? `avançou a agenda: ${agent.agenda}` : "mudou de lugar por conta própria";
+    if (roll > 0.64) {
+      events.push({ id: `npc:${agent.id}:move:${turn}`, turn, title: "Movimento fora de cena", detail: `${agent.name} não ficou esperando: mudou de posição enquanto a investigação avançava.`, location: target, tone: "quiet", source: "npc", sourceId: agent.id });
+    }
+    maybeScheduleNpcMeeting(agent, schedules, ledger, key, turn);
+  }
+
+  return { agents: next, events };
+}
+
+function processSchedules(
+  schedules: WorldScheduledEvent[],
+  ledger: LedgerData,
+  turn: number
+): { schedules: WorldScheduledEvent[]; events: WorldEvent[] } {
+  const next = schedules.map((event) => ({ ...event }));
+  const events: WorldEvent[] = [];
+  const here = normalizeText(ledger.location || "");
+
+  for (const event of next) {
+    if (event.status !== "pending" || turn < event.dueTick) continue;
+    const target = normalizeText(event.location);
+    const words = target.split(" ").filter((word) => word.length >= 5);
+    const atLocation = words.some((word) => here.includes(word));
+
+    if (atLocation && turn <= event.expiresTick) {
+      event.status = "triggered";
+      events.push({ id: `${event.id}:triggered`, turn, title: event.title, detail: `${event.detail} Você chegou enquanto a janela ainda estava aberta.`, location: event.location, tone: "urgent", source: "schedule", sourceId: event.id });
+      continue;
+    }
+    if (turn > event.expiresTick) {
+      event.status = "missed";
+      events.push({ id: `${event.id}:missed`, turn, title: "Você chegou tarde", detail: `O encontro em ${event.location} passou. Quem esperava por você já tomou outra decisão.`, location: event.location, tone: "ominous", source: "schedule", sourceId: event.id });
+      continue;
+    }
+    if (!event.announced) {
+      event.announced = true;
+      events.push({ id: `${event.id}:announced`, turn, title: event.title, detail: `${event.detail} Local: ${event.location}.`, location: event.location, tone: "quiet", source: "schedule", sourceId: event.id });
+    }
+  }
+
+  return { schedules: next.slice(-24), events };
+}
+
 export function advanceWorldSimulation(
   previous: WorldSimulationState | undefined,
   origin: GameOrigin,
   ledger: LedgerData,
-  action: string
+  action: string,
+  externalEvents: WorldEvent[] = []
 ): WorldSimulationState {
-  const base = previous || initializeWorldSimulation(origin, ledger);
+  const base = upgradeWorld(previous, origin, ledger);
   const key = campaignKey(origin, ledger);
   const turn = Math.max(base.tick + 1, ledger.offlineState?.turn || base.tick + 1);
   const actionClass = classifyAction(action);
@@ -271,10 +527,23 @@ export function advanceWorldSimulation(
     if (moved.event) generated.push(moved.event);
   });
 
-  const recentEvents = [...base.recentEvents, ...generated].slice(-8);
+  const schedules = (base.scheduledEvents || []).map((event) => ({ ...event }));
+  const npcResult = advanceNpcAgents(
+    base.npcAgents || {},
+    schedules,
+    ledger,
+    key,
+    turn,
+    cityPressure,
+    factions["occult-network"].hostility
+  );
+  const scheduleResult = processSchedules(schedules, ledger, turn);
+
+  const normalizedExternal = externalEvents.map((event) => ({ ...event, turn: event.turn || turn, source: event.source || "story" as const }));
+  const recentEvents = [...base.recentEvents, ...generated, ...npcResult.events, ...scheduleResult.events, ...normalizedExternal].slice(-12);
 
   return {
-    version: 1,
+    version: 2,
     tick: turn,
     day: base.day + dayAdvance,
     minuteOfDay,
@@ -284,6 +553,8 @@ export function advanceWorldSimulation(
     occultNoise,
     factions,
     recentEvents,
+    npcAgents: npcResult.agents,
+    scheduledEvents: scheduleResult.schedules,
     lastPlayerAction: action,
   };
 }
