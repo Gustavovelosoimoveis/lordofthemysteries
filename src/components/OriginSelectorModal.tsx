@@ -224,6 +224,7 @@ INSTRUÇÃO PARA O GAME MASTER: O jogador ACABOU de despertar. Ele é 100% munda
       playerName: playerName.trim(),
       gender: gender,
       originType: originType,
+      earthBackground: originType === "Transmigrado da Terra" ? earthProfession.trim() : undefined,
       attributes: attributes,
       campaignSeed: campaignSeed.trim().toUpperCase() || makeSeed(),
     };
@@ -374,12 +375,12 @@ INSTRUÇÃO PARA O GAME MASTER: O jogador ACABOU de despertar. Ele é 100% munda
 
           {originType === "Transmigrado da Terra" && (
             <div className="animate-fadeIn">
-              <label className="block text-[11px] font-mono uppercase text-[#a89371] mb-1.5">Ocupação Original na Terra</label>
+              <label className="block text-[11px] font-mono uppercase text-[#a89371] mb-1.5">Histórico / Formação na Terra</label>
               <input
                 type="text"
                 value={earthProfession}
                 onChange={(e) => setEarthProfession(e.target.value)}
-                placeholder="Ex: Investigador Criminal, Estudante..."
+                placeholder="Ex: estudante de Direito e de misticismo"
                 className="w-full px-3 py-2 rounded bg-[#161a25] border border-[#2e3748] text-sm text-[#ebdcc6] focus:outline-none focus:border-[#c9a875]"
               />
             </div>

@@ -23,6 +23,18 @@ export type LocalIntent =
 
 type AttributeKey = "vigor" | "destreza" | "intelecto" | "percepcao" | "carisma";
 
+type OriginExpertiseTag =
+  | "legal"
+  | "occult-studies"
+  | "academic"
+  | "investigative"
+  | "medical"
+  | "technical"
+  | "journalistic"
+  | "commercial"
+  | "maritime"
+  | "social";
+
 export type NpcAgendaGoal =
   | "conceal-evidence"
   | "recover-object"
@@ -74,6 +86,11 @@ export interface OfflineGameState {
   lastEventTurn: number;
   /** Objetivos que avançam mesmo quando o jogador ignora os NPCs. */
   npcAgendas: Record<string, OfflineNpcAgenda>;
+  /** Formação anterior reconhecida pelo motor, preservada para coerência narrativa. */
+  earthBackground?: string;
+  originTags?: OriginExpertiseTag[];
+  /** Ocupação do corpo/local de Loen; não substitui a identidade anterior do transmigrado. */
+  bodyRole?: string;
   /** Último foco inferido para resolver referências como “ele”, “ela” ou “isso” em turnos seguintes. */
   focusNpc?: string;
   focusItem?: string;
@@ -1172,6 +1189,106 @@ function normalizeText(input: string): string {
     .trim();
 }
 
+function earthBackground(origin: GameOrigin): string {
+  if (origin.earthBackground?.trim()) return origin.earthBackground.trim();
+  const match = origin.summary?.match(/Profissão original:\s*([^.]*)/i);
+  return match?.[1]?.trim() || "";
+}
+
+function inferOriginTags(origin: GameOrigin): OriginExpertiseTag[] {
+  const source = normalizeText([earthBackground(origin), origin.summary || ""].join(" "));
+  const tags: OriginExpertiseTag[] = [];
+  const has = (...words: string[]) => words.some((word) => source.includes(word));
+
+  if (has("direito", "jurid", "advog", "lei", "legal", "tribunal")) tags.push("legal");
+  if (has("mistic", "ocult", "esoter", "simbol", "ritual", "religio")) tags.push("occult-studies");
+  if (has("estudante", "univers", "pesquis", "historia", "filosof", "professor", "academ")) tags.push("academic");
+  if (has("investig", "policia", "detet", "criminal", "pericia")) tags.push("investigative");
+  if (has("medic", "enferm", "saude", "biolog", "farmac")) tags.push("medical");
+  if (has("engen", "tecnic", "mecanic", "program", "eletric", "relog")) tags.push("technical");
+  if (has("jornal", "report", "redator", "imprensa", "comunic")) tags.push("journalistic");
+  if (has("comerc", "contab", "financ", "administr", "vendas", "econom")) tags.push("commercial");
+  if (has("marinha", "naval", "porto", "navio", "mergul")) tags.push("maritime");
+  if (has("psicolog", "sociolog", "negocia", "atendimento", "relacoes")) tags.push("social");
+
+  return unique(tags);
+}
+
+const START_AFFINITIES: Record<string, OriginExpertiseTag[]> = {
+  "iron-cross-room": ["academic", "investigative"],
+  "khoy-archive": ["academic", "occult-studies", "investigative"],
+  "tussock-crate": ["maritime", "investigative"],
+  "east-district-apothecary": ["medical", "occult-studies"],
+  "st-george-coffin": ["medical", "occult-studies"],
+  "hillston-bookshop": ["academic", "occult-studies"],
+  "bridge-club": ["social", "investigative"],
+  "joewood-ledger": ["legal", "commercial", "investigative"],
+  "north-factory": ["technical", "investigative"],
+  "empress-heirloom": ["social", "investigative", "occult-studies"],
+  "pritz-manifest": ["legal", "commercial", "maritime", "investigative"],
+  "pritz-smugglers": ["maritime", "investigative"],
+  "conot-mine": ["technical", "investigative"],
+  "bayam-incense": ["social", "occult-studies"],
+  "bayam-diver": ["maritime", "investigative"],
+  "trier-clockwork": ["technical", "investigative"],
+  "trier-river": ["journalistic", "investigative"],
+  "backlund-morgue": ["medical", "investigative", "occult-studies"],
+  "court-testament": ["legal", "academic", "investigative", "occult-studies"],
+  "tram-ticket": ["investigative", "social"],
+  "newspaper-proof": ["journalistic", "academic", "investigative"],
+  "theatre-mask": ["social", "occult-studies"],
+  "hospital-ward": ["medical", "social", "occult-studies"],
+  "canal-photograph": ["technical", "investigative"],
+  "police-evidence": ["legal", "investigative"],
+  "church-donation": ["occult-studies", "social", "academic"],
+};
+
+function startAffinity(start: OfflineStart, tags: OriginExpertiseTag[]): number {
+  if (!tags.length) return 0;
+  const affinities = START_AFFINITIES[start.id] || [];
+  return tags.reduce((score, tag) => score + (affinities.includes(tag) ? (tag === "legal" || tag === "occult-studies" ? 3 : 2) : 0), 0);
+}
+
+function backgroundNarrative(origin: GameOrigin): string {
+  const tags = inferOriginTags(origin);
+  const pieces: string[] = [];
+  if (tags.includes("legal")) pieces.push("Minha formação jurídica me faz procurar procedimento, autoria, rasuras, contradições e cadeia de responsabilidade antes de aceitar qualquer versão.");
+  if (tags.includes("occult-studies")) pieces.push("Meus estudos de misticismo na Terra servem como repertório comparativo, não como conhecimento das leis sobrenaturais deste mundo; símbolos familiares podem significar outra coisa aqui.");
+  if (tags.includes("medical")) pieces.push("Meu repertório de saúde me faz separar sinais físicos observáveis de superstição antes de concluir qualquer coisa.");
+  if (tags.includes("technical")) pieces.push("Minha formação técnica me leva a procurar mecanismo, falha material, sequência e causa verificável.");
+  if (tags.includes("journalistic")) pieces.push("Meu hábito de apurar me faz distinguir testemunho, boato, fonte e evidência documental.");
+  if (tags.includes("investigative") && !tags.includes("legal")) pieces.push("Meu repertório investigativo me faz preservar detalhes, horários e inconsistências antes de agir.");
+  if (tags.includes("academic") && pieces.length < 2) pieces.push("Minha formação acadêmica me ajuda a comparar fontes e desconfiar de conclusões rápidas.");
+  return pieces.slice(0, 2).join(" ");
+}
+
+function openingIdentity(origin: GameOrigin, start: OfflineStart): string {
+  const name = origin.playerName || "um desconhecido";
+  const bg = earthBackground(origin);
+  if (origin.originType === "Transmigrado da Terra") {
+    const past = bg ? `Na Terra, eu era ${bg}.` : "Na Terra, eu tinha outra vida — ainda consigo lembrar dela.";
+    return `Meu nome é ${name}. ${past} Agora desperto em Loen dentro do corpo de ${start.role}. As memórias práticas deste corpo existem em fragmentos — rotinas, nomes, caminhos — mas não apagam quem eu era antes. ${backgroundNarrative(origin)}`.trim();
+  }
+  if (origin.originType === "Amnésico Humano") {
+    return `Meu nome é ${name}, ou pelo menos é o nome que consigo sustentar. Desperto como ${start.role}, cercado por memórias incompletas que não sei distinguir de hábito, medo ou invenção.`;
+  }
+  return `Eu sou ${name}, ${start.role}. Minha vida até aqui foi mundana o bastante para que o que acontece agora pareça uma ruptura, não uma continuação.`;
+}
+
+function expertiseBonus(origin: GameOrigin, parsed: ParsedAction): number {
+  const tags = inferOriginTags(origin);
+  const intents = [parsed.primary, ...(parsed.secondary ? [parsed.secondary] : [])];
+  let bonus = 0;
+  const hasIntent = (...wanted: LocalIntent[]) => intents.some((intent) => wanted.includes(intent));
+  if (tags.includes("legal") && hasIntent("read", "question", "report", "investigate", "deceive")) bonus += 1;
+  if (tags.includes("occult-studies") && hasIntent("read", "observe", "investigate", "occult")) bonus += 1;
+  if (tags.includes("medical") && hasIntent("observe", "investigate", "protect")) bonus += 1;
+  if (tags.includes("technical") && hasIntent("read", "investigate", "use-item", "observe")) bonus += 1;
+  if (tags.includes("journalistic") && hasIntent("question", "investigate", "follow", "read")) bonus += 1;
+  if (tags.includes("investigative") && hasIntent("observe", "investigate", "follow", "question")) bonus += 1;
+  return Math.min(2, bonus);
+}
+
 function hashString(input: string): number {
   let h = 2166136261;
   for (let i = 0; i < input.length; i++) {
@@ -1300,6 +1417,7 @@ function originSeedSignature(origin: GameOrigin): string {
   return [
     normalizeCampaignSeed(origin.campaignSeed),
     origin.originType || "Pessoa Normal de Loen",
+    normalizeText(earthBackground(origin)),
     attrs.vigor,
     attrs.destreza,
     attrs.intelecto,
@@ -1335,6 +1453,9 @@ function baseState(origin: GameOrigin, start: OfflineStart): OfflineGameState {
     eventHistory: [],
     lastEventTurn: 0,
     npcAgendas: initializeNpcAgendas(start, seed),
+    earthBackground: earthBackground(origin) || undefined,
+    originTags: inferOriginTags(origin),
+    bodyRole: start.role,
   };
 }
 
@@ -1343,9 +1464,27 @@ function getStart(state?: OfflineGameState): OfflineStart {
 }
 
 function selectStart(origin: GameOrigin): OfflineStart {
-  // O nome do jogador não entra na seleção: mesma seed + mesma ficha = mesmo mundo inicial.
-  const seed = hashString(`${originSeedSignature(origin)}|start-v3`);
-  return choose(STARTS, seed);
+  // A seed continua determinística, mas o passado declarado agora influencia quais prólogos fazem sentido.
+  // Um estudante de Direito e misticismo, por exemplo, tende a acordar em corpos/cenários com afinidade
+  // documental, jurídica, acadêmica ou ocultista — sem transformar o passado da Terra em poderes de Loen.
+  const seed = hashString(`${originSeedSignature(origin)}|start-v3.1-origin-aware`);
+  const tags = inferOriginTags(origin);
+  if (!tags.length || origin.originType !== "Transmigrado da Terra") return choose(STARTS, seed);
+
+  const scored = STARTS.map((start) => ({ start, score: startAffinity(start, tags) }))
+    .filter((entry) => entry.score > 0);
+  if (!scored.length) return choose(STARTS, seed);
+
+  // Sorteio determinístico ponderado: a ficha influencia muito, mas não aprisiona o jogador
+  // a um único prólogo. Afinidades fortes aparecem mais; outras compatíveis continuam possíveis.
+  const weighted = scored.map((entry) => ({ ...entry, weight: Math.pow(entry.score + 1, 2) }));
+  const totalWeight = weighted.reduce((sum, entry) => sum + entry.weight, 0);
+  let cursor = seeded01(seed) * totalWeight;
+  for (const entry of weighted) {
+    cursor -= entry.weight;
+    if (cursor <= 0) return entry.start;
+  }
+  return weighted[weighted.length - 1].start;
 }
 
 function upgradeOfflineState(origin: GameOrigin, previous: any, start: OfflineStart): OfflineGameState {
@@ -1369,6 +1508,9 @@ function upgradeOfflineState(origin: GameOrigin, previous: any, start: OfflineSt
     npcAgendas: previous.npcAgendas && Object.keys(previous.npcAgendas).length > 0
       ? JSON.parse(JSON.stringify(previous.npcAgendas))
       : initializeNpcAgendas(start, seed),
+    earthBackground: previous.earthBackground || earthBackground(origin) || undefined,
+    originTags: previous.originTags || inferOriginTags(origin),
+    bodyRole: previous.bodyRole || start.role,
   };
 }
 
@@ -1376,7 +1518,7 @@ function formatTurn(scene: string, dialogue: string, status: string, dilemma: st
   return `[CENA]\n${scene}\n\n[DIÁLOGO]\n${dialogue}\n\n[STATUS DO MUNDO]\n${status}\n\n${dilemma}`;
 }
 
-function localOptions(start: OfflineStart, state: OfflineGameState): string[] {
+function localOptions(start: OfflineStart, state: OfflineGameState, origin?: GameOrigin): string[] {
   const pools = [
     [
       `[PERCEPÇÃO] Examinar ${start.clue} sem tocar em nada.`,
@@ -1403,7 +1545,16 @@ function localOptions(start: OfflineStart, state: OfflineGameState): string[] {
       `[PERCEPÇÃO] Observar mais uma noite e descobrir quem aparece quando todos acreditam que o caso acabou.`,
     ],
   ];
-  const pool = pools[Math.min(state.phase, pools.length - 1)];
+  let pool = [...pools[Math.min(state.phase, pools.length - 1)]];
+  if (state.phase === 0 && origin?.originType === "Transmigrado da Terra") {
+    const tags = inferOriginTags(origin);
+    if (tags.includes("legal")) {
+      pool[0] = `[INTELECTO] Tratar ${start.object} como prova: conferir origem, rasuras, responsabilidade e quem tinha acesso.`;
+    }
+    if (tags.includes("occult-studies")) {
+      pool[2] = `[INTELECTO] Comparar os símbolos e anomalias da cena com meu repertório de misticismo da Terra, sem presumir que as regras sejam iguais em Loen.`;
+    }
+  }
   // A interface e as regras originais trabalham com exatamente 3 sugestões por turno.
   // Mantemos uma quarta alternativa no pool para variar partidas, mas o jogador sempre recebe 3.
   const omitIndex = Math.floor(seeded01(state.seed + state.turn * 43 + state.phase * 101) * pool.length) % pool.length;
@@ -1433,6 +1584,12 @@ export function startOfflineChronicle(origin: GameOrigin, initialLedger: LedgerD
     npcs: [npc],
     clues: [start.clue],
     mysteries: [start.hook, start.secret],
+    playerNotes: unique([
+      ...(initialLedger.playerNotes || []),
+      origin.originType === "Transmigrado da Terra"
+        ? `Identidade anterior: ${earthBackground(origin) || "vida na Terra não especificada"}. Corpo atual em Loen: ${start.role}.`
+        : `Origem: ${origin.originType || "Pessoa Normal de Loen"}. Papel inicial em Loen: ${start.role}.`,
+    ]),
     items: [
       {
         id: `offline-start-${start.id}`,
@@ -1446,10 +1603,11 @@ export function startOfflineChronicle(origin: GameOrigin, initialLedger: LedgerD
     offlineState: state,
   };
 
-  const options = localOptions(start, state);
+  const options = localOptions(start, state, origin);
+  const identity = openingIdentity(origin, start);
   const text = formatTurn(
-    `Eu sou ${origin.playerName || "um desconhecido"}, ${start.role}. ${start.hook.charAt(0).toUpperCase()}${start.hook.slice(1)}. Tenho comigo ${start.object}. Antes que eu consiga organizar os pensamentos, noto que ${start.threat}.\n\nNão há explicação confortável. Ainda sou uma pessoa comum; tudo o que tenho são meus sentidos, minha experiência e a decisão de não ignorar o detalhe errado.`,
-    `— Não devia estar olhando para isso — diz ${start.npc.name}, ${start.npc.role}. A voz tenta soar firme, mas não combina com ${start.npc.attitude}. — Se quiser sair daqui inteiro, esqueça o que viu.`,
+    `${identity}\n\n${start.hook.charAt(0).toUpperCase()}${start.hook.slice(1)}. Tenho comigo ${start.object}. Antes que eu consiga organizar os pensamentos, noto que ${start.threat}.\n\nNão há explicação confortável. Ainda sou uma pessoa comum, sem Poção e sem conhecimento confiável sobre Beyonders; tudo o que tenho são meus sentidos, as experiências que realmente possuo e a decisão de não ignorar o detalhe errado.`,
+    `— Não devia estar olhando para isso — diz ${start.npc.name}, ${start.npc.role}. A voz tenta soar firme, mas há tensão demais no modo como me encara. — Se quiser sair daqui inteiro, esqueça o que viu.`,
     `${start.location} | ${start.time} | Seed: ${state.campaignSeed} | Pressão: baixa, atenção indesejada começando a crescer`,
     dilemmaText(options)
   );
@@ -1697,7 +1855,7 @@ function resolveAction(parsed: ParsedAction, origin: GameOrigin, state: OfflineG
   if (parsed.specificity >= 4) difficulty -= 1;
   difficulty = Math.max(1, Math.min(9, difficulty));
   const roll = 1 + Math.floor(seeded01(hashString(`${state.seed}|${state.turn}|${parsed.normalized}`)) * 6);
-  const total = roll + attr + Math.floor(parsed.specificity / 2);
+  const total = roll + attr + Math.floor(parsed.specificity / 2) + expertiseBonus(origin, parsed);
   if (total >= difficulty + 5) return { success: "strong", roll, difficulty };
   if (total >= difficulty + 2) return { success: "success", roll, difficulty };
   if (total >= difficulty) return { success: "mixed", roll, difficulty };
@@ -1746,7 +1904,7 @@ function applyIntentState(state: OfflineGameState, p: ParsedAction, outcome: Ret
   state.phase = Math.min(3, Math.floor(state.turn / 4));
 }
 
-function actionConsequenceText(p: ParsedAction, result: ReturnType<typeof resolveAction>, start: OfflineStart, state: OfflineGameState): { scene: string; dialogue: string; sanityDelta: number; newClue?: string; secret?: string; location?: string; mood: AudioMood } {
+function actionConsequenceText(p: ParsedAction, result: ReturnType<typeof resolveAction>, start: OfflineStart, state: OfflineGameState, origin: GameOrigin): { scene: string; dialogue: string; sanityDelta: number; newClue?: string; secret?: string; location?: string; mood: AudioMood } {
   const outcomeLead = {
     strong: "Minha abordagem funciona melhor do que eu esperava.",
     success: "A decisão produz resultado.",
@@ -1884,7 +2042,15 @@ function actionConsequenceText(p: ParsedAction, result: ReturnType<typeof resolv
   if (result.success === "fail" && sanityDelta === 0 && state.occultExposure > 4) sanityDelta = -2;
   if (state.phase >= 2 && state.evidence >= 6 && !secret) secret = start.secret;
 
-  const scene = `${outcomeLead} ${detail}${p.secondary ? ` Minha ação também carrega uma segunda intenção — ${intentLabel(p.secondary)} — e isso altera a reação das pessoas ao redor.` : ""}${secondaryDetail}`;
+  const tags = inferOriginTags(origin);
+  let expertiseText = "";
+  if (tags.includes("legal") && ["read", "question", "report", "investigate", "deceive"].includes(p.primary)) {
+    expertiseText = " Minha formação jurídica anterior não resolve o mistério, mas me ajuda a separar fato, versão, procedimento e responsabilidade.";
+  } else if (tags.includes("occult-studies") && ["read", "observe", "investigate", "occult"].includes(p.primary)) {
+    expertiseText = " Meu repertório místico da Terra oferece comparações úteis, mas eu trato qualquer semelhança como hipótese: Loen não tem obrigação de obedecer às crenças do meu mundo.";
+  }
+
+  const scene = `${outcomeLead} ${detail}${expertiseText}${p.secondary ? ` Minha ação também carrega uma segunda intenção — ${intentLabel(p.secondary)} — e isso altera a reação das pessoas ao redor.` : ""}${secondaryDetail}`;
   return { scene, dialogue, sanityDelta, newClue: clue, secret, location, mood };
 }
 
@@ -1990,7 +2156,7 @@ export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger
   if (parsed.target) state.focusNpc = parsed.target;
   if (parsed.item) state.focusItem = parsed.item;
   state.lastIntents = [parsed.primary, ...(parsed.secondary ? [parsed.secondary] : [])];
-  const consequence = actionConsequenceText(parsed, result, start, state);
+  const consequence = actionConsequenceText(parsed, result, start, state, origin);
 
   if (consequence.location) {
     ledger.location = consequence.location;
@@ -2084,7 +2250,7 @@ export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger
   const end = maybeEnding(origin, state, ledger);
   if (end) return endingTurn(origin, state, ledger, end);
 
-  const options = localOptions(start, state);
+  const options = localOptions(start, state, origin);
   const statusPressure = state.pressure >= 75 ? "ameaça imediata" : state.pressure >= 45 ? "atenção hostil crescente" : "tensão controlável";
   const sceneParts = [
     consequence.scene,

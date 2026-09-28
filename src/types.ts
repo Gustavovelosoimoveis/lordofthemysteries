@@ -72,6 +72,8 @@ export interface GameOrigin {
   /** Seed compartilhável usada pelo Motor Local para reproduzir a mesma crônica-base. */
   campaignSeed?: string;
   originType?: "Transmigrado da Terra" | "Amnésico Humano" | "Pessoa Normal de Loen";
+  /** Formação, profissão ou conhecimentos declarados pelo jogador antes da transmigração. */
+  earthBackground?: string;
   attributes?: {
     vigor: number;
     destreza: number;
