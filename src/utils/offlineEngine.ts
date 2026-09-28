@@ -1,5 +1,6 @@
 import { AudioMood, GameOrigin, LedgerData, NPCRecord } from "../types";
 import { OFFLINE_ENDING_EXPANSIONS, OFFLINE_STORY_ARCS, type OfflineStoryArc } from "../data/offlineNarrative";
+import { OFFLINE_BRANCH_ARCS, OFFLINE_BRANCH_STATS, type EndgameFork, type NpcFate, type ObjectFork, type RelationshipFork } from "../data/offlineBranches";
 
 export type LocalIntent =
   | "observe"
@@ -61,7 +62,7 @@ export interface OfflineNpcAgenda {
 }
 
 export interface OfflineGameState {
-  engineVersion: 3;
+  engineVersion: 4;
   startId: string;
   turn: number;
   phase: number;
@@ -100,6 +101,18 @@ export interface OfflineGameState {
   wounds: number;
   /** Erros fatais ou quase fatais registrados para manter continuidade. */
   fatalMistakes: string[];
+  /** V3.3: relação concreta com o NPC-chave. Não representa alinhamento moral global. */
+  relationshipFork?: RelationshipFork;
+  /** Destino do objeto/prova central — uma segunda bifurcação independente da relação com NPCs. */
+  objectFork?: ObjectFork;
+  /** Estratégia do ato final; pode contradizer completamente escolhas anteriores. */
+  endgameFork?: EndgameFork;
+  /** Capítulos realmente vistos nesta campanha. Os demais permanecem fechados e não são narrados. */
+  branchHistory: string[];
+  closedBranches: string[];
+  unlockedLocations: string[];
+  npcFates: Record<string, NpcFate>;
+  npcInteractions: Record<string, number>;
   /** Final de morte imediato escolhido pelo motor, quando aplicável. */
   deathEndingId?: string;
   /** Último foco inferido para resolver referências como “ele”, “ela” ou “isso” em turnos seguintes. */
@@ -1207,6 +1220,30 @@ function normalizeText(input: string): string {
     .trim();
 }
 
+function intentExplicitlyNegated(text: string, intent: LocalIntent): boolean {
+  const patterns: Partial<Record<LocalIntent, RegExp>> = {
+    observe: /\b(?:nao|sem|evito|evitar)\s+(?:olh|observ|examin|escut|vigi)[a-z0-9'-]*\b/,
+    investigate: /\b(?:nao|sem|evito|evitar)\s+(?:investig|procur|vasculh|revist|verific|inspecion)[a-z0-9'-]*\b/,
+    question: /\b(?:nao|sem|evito|evitar)\s+(?:pergunt|question|interrog|convers)[a-z0-9'-]*\b/,
+    persuade: /\b(?:nao|sem|evito|evitar)\s+(?:convenc|persuad|negoci|argument)[a-z0-9'-]*\b/,
+    deceive: /\b(?:nao|sem|evito|evitar)\s+(?:mint|engan|blef|disfarc|invent)[a-z0-9'-]*\b|\b(?:digo|conto)\s+a\s+verdade\b/,
+    threaten: /\b(?:nao|sem|evito|evitar)\s+(?:ameac|intimid|coag|pression)[a-z0-9'-]*\b/,
+    follow: /\b(?:nao|sem|evito|evitar)\s+(?:sig|segu|persig|rastre|acompanh)[a-z0-9'-]*\b/,
+    hide: /\b(?:nao|sem|evito|evitar)\s+(?:escond|ocult)[a-z0-9'-]*\b/,
+    flee: /\b(?:nao|sem|evito|evitar)\s+(?:fug|escap|recu|retir)[a-z0-9'-]*\b/,
+    fight: /\b(?:nao|sem|evito|evitar)\s+(?:atac|lut|brig|golpe|soc|chut|atir|esfaque)[a-z0-9'-]*\b|\bsem\s+violencia\b/,
+    protect: /\b(?:nao|sem|evito|evitar)\s+(?:proteg|defend|salv|socorr|ajud)[a-z0-9'-]*\b/,
+    steal: /\b(?:nao|sem|evito|evitar)\s+(?:roub|furt|subtra)[a-z0-9'-]*\b/,
+    read: /\b(?:nao|sem|evito|evitar)\s+(?:lei|leio|ler|decifr|estud|interpret)[a-z0-9'-]*\b/,
+    "use-item": /\b(?:nao|sem|evito|evitar)\s+(?:uso|usar|utiliz|toco|tocar|abro|abrir)[a-z0-9'-]*\b/,
+    travel: /\b(?:nao|sem|evito|evitar)\s+(?:entro|entrar|vou|ir|sigo|seguir|retorn|volto)[a-z0-9'-]*\b/,
+    wait: /\b(?:nao|sem|evito|evitar)\s+(?:esper|aguard|descans)[a-z0-9'-]*\b/,
+    report: /\b(?:nao|sem|evito|evitar)\s+(?:denunci|avis|inform|cham)[a-z0-9'-]*(?:\s+(?:a|ao))?\s*(?:policia|autoridade|igreja)?\b/,
+    occult: /\b(?:nao|sem|evito|evitar)\s+(?:ritual|invoc|magia|feitic|ocult|pocao|adivinh)[a-z0-9'-]*\b/,
+  };
+  return patterns[intent]?.test(text) || false;
+}
+
 function earthBackground(origin: GameOrigin): string {
   if (origin.earthBackground?.trim()) return origin.earthBackground.trim();
   const match = origin.summary?.match(/Profissão original:\s*([^.]*)/i);
@@ -1287,6 +1324,28 @@ function storyArc(start: OfflineStart): OfflineStoryArc {
   };
 }
 
+function branchArc(start: OfflineStart) {
+  return OFFLINE_BRANCH_ARCS[start.id];
+}
+
+function renderBranchText(template: string, start: OfflineStart): string {
+  return template
+    .replaceAll("{{primary}}", start.npc.name)
+    .replaceAll("{{secondary}}", start.secondNpc.name)
+    .replaceAll("{{object}}", start.object)
+    .replaceAll("{{nextLocation}}", start.nextLocation)
+    .replaceAll("{{secret}}", start.secret);
+}
+
+function pushBranchHistory(state: OfflineGameState, entry: string) {
+  state.branchHistory = unique([...(state.branchHistory || []), entry]);
+}
+
+function unlockBranchLocation(state: OfflineGameState, location: string) {
+  if (!location) return;
+  state.unlockedLocations = unique([...(state.unlockedLocations || []), location]);
+}
+
 function backgroundNarrative(origin: GameOrigin): string {
   const tags = inferOriginTags(origin);
   const pieces: string[] = [];
@@ -1306,11 +1365,20 @@ function openingIdentity(origin: GameOrigin, start: OfflineStart): string {
   const arc = storyArc(start);
   if (origin.originType === "Transmigrado da Terra") {
     const past = bg ? `Na Terra, eu era ${bg}.` : "Na Terra, eu tinha outra vida — ainda consigo lembrar dela em detalhes demais para chamar de sonho.";
+    const rupture = choose([
+      "Minha última lembrança clara da Terra termina sem transição útil. Não há túnel de luz nem explicação; há apenas um intervalo que minha memória não consegue preencher.",
+      "A memória da Terra continua nítida até um ponto preciso e então falha. O próximo instante pertence a um teto que nunca vi, a um cheiro que não reconheço e a um coração que já estava batendo antes de eu chegar.",
+      "Não acordo pensando que renasci. A primeira hipótese é desmaio; a segunda, sequestro; a terceira demora porque é absurda demais. Só que as duas primeiras morrem uma a uma diante dos detalhes.",
+      "Por alguns segundos tento encaixar o que vejo em alguma reconstrução histórica, sonho lúcido ou delírio. O problema é que meu corpo sabe coisas que eu não sei — e as sabe com a naturalidade de anos de hábito.",
+    ], hashString(`${start.id}|${originSeedSignature(origin)}|transmigration-opening`));
     return [
       `Meu nome é ${name}. ${past}`,
-      `A consciência volta antes que eu entenda o corpo. Primeiro vêm sensações que não reconheço; depois palavras, nomes de ruas e hábitos que chegam como lembranças emprestadas. Eu sei onde estou sem jamais ter estado aqui. Sei como estas mãos trabalham sem ter aprendido o ofício. Só então a ideia impossível se torna inevitável: eu despertei em Loen no corpo de ${start.role}.`,
+      rupture,
+      `A consciência chega em camadas. Primeiro sinto a roupa, a temperatura e o peso estranho destas mãos. Depois vêm reflexos musculares que não são meus: onde guardar uma chave, como executar o trabalho de ${start.role}, qual rua evitar ao voltar para casa. Não são lembranças que substituem minha identidade; são memórias de uso, enxertadas ao redor dela.`,
+      `O idioma produz o choque seguinte. Eu vejo palavras que jamais estudei e, ainda assim, o sentido chega antes que eu consiga perguntar como. Moedas, nomes de ruas, instituições e costumes fazem sentido em fragmentos. O bastante para eu funcionar. Longe de ser o bastante para eu compreender o mundo em que acordei.`,
+      `Então reconheço o nome do lugar: ${start.location}. A conclusão deixa de ser metáfora. Estou em outro mundo, dentro da vida de outra pessoa, e qualquer conhecimento que eu trouxe da Terra precisa sobreviver a uma regra simples: familiar não significa verdadeiro aqui.`,
       arc.bodyMemory,
-      `As memórias deste corpo não apagam as minhas. Elas se encaixam ao redor delas, às vezes úteis, às vezes íntimas demais. ${backgroundNarrative(origin)}`,
+      `Respiro e escolho um ponto de apoio: fatos antes de teoria. ${backgroundNarrative(origin)} Se existe uma vantagem em ter duas vidas dentro da mesma cabeça, ela não é saber o futuro; é perceber mais cedo quando algo não se encaixa.`,
     ].join("\n\n").trim();
   }
   if (origin.originType === "Amnésico Humano") {
@@ -1414,7 +1482,7 @@ export function interpretOfflineAction(action: string, ledger: LedgerData, start
       }
       return { intent, score };
     })
-    .filter((r) => r.score > 0)
+    .filter((r) => r.score > 0 && !intentExplicitlyNegated(normalized, r.intent))
     .sort((a, b) => b.score - a.score);
 
   // Heurísticas leves para linguagem natural que não depende de comandos fechados.
@@ -1431,6 +1499,11 @@ export function interpretOfflineAction(action: string, ledger: LedgerData, start
   const speechAfterColon = action.match(/(?:digo|pergunto|respondo|falo|conto)[^:]{0,50}:\s*(.{3,180})$/i);
   const directSpeech = (quoted?.[1] || speechAfterColon?.[1] || "").trim() || undefined;
   const speechNorm = normalizeText(directSpeech || "");
+  const explicitlyReckless = /\b(sem cuidado|sem cautela|sem pensar|sem planejar|nao ligo para o risco|ignoro o perigo|ignoro o aviso)\b/.test(normalized);
+  const cautiousAction = !explicitlyReckless && /cuidado|cautela|devagar|a distancia|sem chamar atencao|discret|planejo antes|preparo uma saida/i.test(normalized);
+  const aggressionNegated = /\b(sem ameac|nao ameac|sem intimid|nao intimid|sem violencia|nao ataco|nao vou atacar|evito briga|evito confronto)\b/.test(normalized);
+  const deceptionNegated = /\b(sem mentir|nao minto|nao vou mentir|digo a verdade|conto a verdade)\b/.test(normalized);
+  const empathyNegated = /\b(nao ajudo|nao protejo|nao salvo|nao socorro|abandono)\b/.test(normalized);
   const inferredPromise = /\b(?:promet|jur|garant)[a-z0-9'-]*\b/.test(normalized) ||
     /\bme comprometo\b/.test(normalized) ||
     /\bpode confiar\b/.test(speechNorm) ||
@@ -1445,10 +1518,10 @@ export function interpretOfflineAction(action: string, ledger: LedgerData, start
     attribute: ATTRIBUTE_BY_INTENT[primary],
     target: findTarget(action, ledger, start),
     item: findItem(action, ledger, start),
-    cautious: /cuidado|cautela|devagar|distancia|sem chamar atencao|discret/i.test(normalized),
-    aggressive: /forca|agress|ameac|arma|soco|bato|ataco|quebro|derrubo/i.test(normalized),
-    empathetic: /ajudo|acalmo|protejo|confio|gentil|por favor|socorro|salvo/i.test(normalized),
-    deceptive: /minto|finjo|blef|engano|disfarc|invento/i.test(normalized),
+    cautious: cautiousAction,
+    aggressive: !aggressionNegated && /forca|agress|ameac|arma|soco|bato|ataco|quebro|derrubo/i.test(normalized),
+    empathetic: !empathyNegated && /ajudo|acalmo|protejo|confio|gentil|por favor|socorro|salvo/i.test(normalized),
+    deceptive: !deceptionNegated && /minto|finjo|blef|engano|disfarc|invento/i.test(normalized),
     promise: inferredPromise || /prometo|juro|dou minha palavra|me comprometo/i.test(normalized),
     directSpeech,
     clauses,
@@ -1482,7 +1555,7 @@ function baseState(origin: GameOrigin, start: OfflineStart): OfflineGameState {
   const campaignSeed = normalizeCampaignSeed(origin.campaignSeed);
   const seed = hashString(`${originSeedSignature(origin)}|engine-v3`);
   return {
-    engineVersion: 3,
+    engineVersion: 4,
     startId: start.id,
     turn: 0,
     phase: 0,
@@ -1512,6 +1585,14 @@ function baseState(origin: GameOrigin, start: OfflineStart): OfflineGameState {
     recklessness: 0,
     wounds: 0,
     fatalMistakes: [],
+    branchHistory: [],
+    closedBranches: [],
+    unlockedLocations: [],
+    npcFates: {
+      [normalizeText(start.npc.name)]: "active",
+      [normalizeText(start.secondNpc.name)]: "active",
+    },
+    npcInteractions: {},
   };
 }
 
@@ -1549,7 +1630,7 @@ function upgradeOfflineState(origin: GameOrigin, previous: any, start: OfflineSt
   const seed = Number.isFinite(previous.seed) ? previous.seed : hashString(`${campaignSeed}|legacy-upgrade`);
   return {
     ...previous,
-    engineVersion: 3,
+    engineVersion: 4,
     startId: previous.startId || start.id,
     turn: previous.turn || 0,
     phase: previous.phase || 0,
@@ -1571,6 +1652,18 @@ function upgradeOfflineState(origin: GameOrigin, previous: any, start: OfflineSt
     recklessness: Number(previous.recklessness || 0),
     wounds: Number(previous.wounds || 0),
     fatalMistakes: [...(previous.fatalMistakes || [])],
+    relationshipFork: previous.relationshipFork,
+    objectFork: previous.objectFork,
+    endgameFork: previous.endgameFork,
+    branchHistory: [...(previous.branchHistory || [])],
+    closedBranches: [...(previous.closedBranches || [])],
+    unlockedLocations: [...(previous.unlockedLocations || [])],
+    npcFates: {
+      [normalizeText(start.npc.name)]: "active",
+      [normalizeText(start.secondNpc.name)]: "active",
+      ...(previous.npcFates || {}),
+    },
+    npcInteractions: { ...(previous.npcInteractions || {}) },
     deathEndingId: previous.deathEndingId,
   };
 }
@@ -1622,6 +1715,18 @@ function localOptions(start: OfflineStart, state: OfflineGameState, origin?: Gam
       pool[2] = `[INTELECTO] Comparar os símbolos e anomalias da cena com meu repertório de misticismo da Terra, sem presumir que as regras sejam iguais em Loen.`;
     }
   }
+  const branchLocation = state.unlockedLocations[state.unlockedLocations.length - 1];
+  if (branchLocation && state.phase >= 1) {
+    pool[2] = `[PERCEPÇÃO] Ir até ${branchLocation} e verificar a consequência exclusiva que minha rota abriu.`;
+  }
+  if (state.objectFork === "weaponized" && state.phase >= 2) {
+    pool[3] = `[DESTREZA] Observar quem reage ao uso de ${start.object} sem repetir exatamente a mesma armadilha.`;
+  } else if (state.objectFork === "surrendered" && state.phase >= 2) {
+    pool[3] = `[CARISMA] Auditar a custódia de ${start.object} e cobrar nome, horário e responsabilidade por cada transferência.`;
+  } else if (state.objectFork === "preserved" && state.phase >= 2) {
+    pool[3] = `[INTELECTO] Comparar ${start.object} com as novas pistas sem alterar sua condição original.`;
+  }
+
   // A interface e as regras originais trabalham com exatamente 3 sugestões por turno.
   // Mantemos uma quarta alternativa no pool para variar partidas, mas o jogador sempre recebe 3.
   const omitIndex = Math.floor(seeded01(state.seed + state.turn * 43 + state.phase * 101) * pool.length) % pool.length;
@@ -1978,6 +2083,398 @@ function applyIntentState(state: OfflineGameState, p: ParsedAction, outcome: Ret
   state.phase = Math.min(3, Math.floor(state.turn / 4));
 }
 
+interface BranchChapterEvent {
+  text: string;
+  dialogue?: string;
+  clue?: string;
+  mood: AudioMood;
+}
+
+function actionUsesIntent(parsed: ParsedAction, ...wanted: LocalIntent[]): boolean {
+  const intents = [parsed.primary, ...(parsed.secondary ? [parsed.secondary] : [])];
+  return intents.some((intent) => wanted.includes(intent));
+}
+
+function importantNpcKey(start: OfflineStart): string {
+  return normalizeText(start.secondNpc.name);
+}
+
+function updateNpcFateFromAction(
+  start: OfflineStart,
+  state: OfflineGameState,
+  parsed: ParsedAction,
+  outcome: ReturnType<typeof resolveAction>,
+): string | undefined {
+  const target = parsed.target ? normalizeText(parsed.target) : "";
+  const key = importantNpcKey(start);
+  if (!target || target !== key) return undefined;
+
+  const current = state.npcFates[key] || "active";
+  const trust = state.npcTrust[key] || 0;
+  let next = current;
+
+  // Relações podem piorar ou ser parcialmente reparadas depois da primeira bifurcação.
+  // Isso é deliberadamente local ao NPC: não existe alinhamento moral global.
+  if (actionUsesIntent(parsed, "fight", "threaten", "steal") || (parsed.deceptive && outcome.success === "fail")) {
+    if (current !== "dead" && current !== "missing") next = "hostile";
+  } else if (actionUsesIntent(parsed, "protect", "persuade", "question") && outcome.success !== "fail" && (parsed.empathetic || trust >= 2)) {
+    if (current === "hostile" && trust >= 2) next = "protected";
+    else if (current === "active") next = "protected";
+  }
+
+  if (next !== current) {
+    state.npcFates[key] = next;
+    const label = next === "protected" ? "relação reconstruída" : "confiança quebrada";
+    pushBranchHistory(state, `npc:${start.secondNpc.name}:${label}:turno-${state.turn}`);
+    return next === "protected"
+      ? `${start.secondNpc.name} não esquece o que aconteceu antes, mas a ação concreta muda a relação. Não há perdão automático; há uma nova margem de confiança construída por comportamento verificável.`
+      : `${start.secondNpc.name} registra a mudança de postura. O que eu fiz com outras pessoas não compensa o que fiz diretamente com ${start.secondNpc.name}; esta relação específica passa a operar contra mim.`;
+  }
+  return undefined;
+}
+
+function chooseRelationshipFork(
+  start: OfflineStart,
+  state: OfflineGameState,
+  parsed: ParsedAction,
+  outcome: ReturnType<typeof resolveAction>,
+): RelationshipFork | undefined {
+  if (state.relationshipFork || state.phase < 1) return undefined;
+  const key = importantNpcKey(start);
+  const trust = state.npcTrust[key] || 0;
+  const interactions = state.npcInteractions[key] || 0;
+  const directlyTargets = parsed.target ? normalizeText(parsed.target) === key : false;
+
+  if (directlyTargets && actionUsesIntent(parsed, "protect", "persuade", "question") && outcome.success !== "fail" && (parsed.empathetic || trust >= 1)) return "protected";
+  if (directlyTargets && (actionUsesIntent(parsed, "fight", "threaten", "steal") || (parsed.deceptive && outcome.success === "fail"))) return "coerced";
+
+  // Se o jogador passou tempo demais ignorando a única pessoa que poderia alterar esta parte da história,
+  // o mundo segue em frente. Isso fecha os capítulos de proteção/coerção para esta campanha.
+  if (state.turn >= 7) {
+    if (trust >= 3) return "protected";
+    if (trust <= -2 || state.violence >= 3 || state.deception >= 4) return "coerced";
+    if (interactions <= 1 || state.turn >= 9) return "lost";
+  }
+  return undefined;
+}
+
+function openRelationshipChapter(
+  start: OfflineStart,
+  state: OfflineGameState,
+  ledger: LedgerData,
+  fork: RelationshipFork,
+): BranchChapterEvent | undefined {
+  const arc = branchArc(start);
+  if (!arc) return undefined;
+  const beat = arc[fork];
+  const key = importantNpcKey(start);
+
+  state.relationshipFork = fork;
+  state.closedBranches = unique([
+    ...state.closedBranches,
+    ...(["protected", "coerced", "lost"] as RelationshipFork[])
+      .filter((other) => other !== fork)
+      .map((other) => `relationship:${other}`),
+  ]);
+  pushBranchHistory(state, `relationship:${fork}:${beat.title}`);
+  unlockBranchLocation(state, beat.unlockLocation);
+
+  if (fork === "protected") {
+    state.npcFates[key] = "protected";
+    state.trust = Math.min(10, state.trust + 2);
+    state.evidence += 1;
+  } else if (fork === "coerced") {
+    state.npcFates[key] = "hostile";
+    state.trust = Math.max(-10, state.trust - 2);
+    state.pressure = Math.min(100, state.pressure + 6);
+    state.danger = Math.min(100, state.danger + 5);
+  } else {
+    state.npcFates[key] = "missing";
+    state.pressure = Math.min(100, state.pressure + 8);
+    state.danger = Math.min(100, state.danger + 4);
+  }
+
+  ledger.clues = unique([...(ledger.clues || []), renderBranchText(beat.clue, start)]);
+  ledger.mysteries = unique([...(ledger.mysteries || []), `O que realmente aconteceu com ${start.secondNpc.name} depois desta bifurcação?`]);
+  ledger.playerNotes = unique([...(ledger.playerNotes || []), `Capítulo aberto: ${beat.title}. Local liberado: ${beat.unlockLocation}.`]);
+
+  return {
+    text: `CAPÍTULO CONDICIONAL — ${beat.title}\n\n${renderBranchText(beat.scene, start)}\n\nEsta rota existe porque minhas ações concretas com ${start.secondNpc.name} produziram esta consequência. As outras duas versões deste capítulo estão fechadas nesta crônica.`,
+    dialogue: fork === "protected"
+      ? `— Não estou fazendo isso porque confio em tudo que você diz — ${start.secondNpc.name} avisa. — Estou fazendo porque vi o que você fez quando podia ter escolhido o caminho fácil.`
+      : fork === "coerced"
+        ? `— Você conseguiu o que queria — diz ${start.secondNpc.name}. — Não confunda isso com lealdade.`
+        : `Não há diálogo. A ausência de ${start.secondNpc.name} ocupa o espaço onde uma resposta deveria existir.`,
+    clue: renderBranchText(beat.clue, start),
+    mood: fork === "protected" ? "discovery" : "tension",
+  };
+}
+
+function chooseObjectFork(
+  state: OfflineGameState,
+  parsed: ParsedAction,
+  outcome: ReturnType<typeof resolveAction>,
+): ObjectFork | undefined {
+  if (state.objectFork || state.phase < 2) return undefined;
+  if (actionUsesIntent(parsed, "report")) return "surrendered";
+  if (actionUsesIntent(parsed, "occult", "steal") || (actionUsesIntent(parsed, "use-item") && !parsed.cautious) || (parsed.deceptive && parsed.item)) return "weaponized";
+  if (outcome.success !== "fail" && actionUsesIntent(parsed, "read", "investigate", "observe")) return "preserved";
+
+  if (state.turn >= 11) {
+    if (state.route === "institucional" || state.lawfulness >= 4) return "surrendered";
+    if (state.route === "clandestina" || state.deception >= 5 || state.occultExposure >= 5) return "weaponized";
+    return "preserved";
+  }
+  return undefined;
+}
+
+function openObjectChapter(start: OfflineStart, state: OfflineGameState, ledger: LedgerData, fork: ObjectFork): BranchChapterEvent {
+  state.objectFork = fork;
+  state.closedBranches = unique([
+    ...state.closedBranches,
+    ...(["preserved", "weaponized", "surrendered"] as ObjectFork[])
+      .filter((other) => other !== fork)
+      .map((other) => `object:${other}`),
+  ]);
+  pushBranchHistory(state, `object:${fork}:turno-${state.turn}`);
+
+  if (fork === "preserved") {
+    state.evidence += 2;
+    state.danger = Math.max(0, state.danger - 2);
+    const clue = `${start.object} foi preservado com origem, sequência e contexto suficientes para continuar servindo como prova em vez de simples curiosidade`;
+    ledger.clues = unique([...(ledger.clues || []), clue]);
+    return {
+      text: `CAPÍTULO CONDICIONAL — A PROVA INTACTA\n\nEu decido que ${start.object} não será isca, troféu nem experimento. Registro posição, origem, alterações e quem teve acesso. A decisão parece menos dramática que abrir uma porta proibida — até duas versões do caso começarem a ruir porque só uma delas consegue explicar o objeto sem contradizer sua cadeia de existência.\n\nAo preservar a peça, fecho as rotas em que ela seria sacrificada ou entregue cedo demais.`,
+      clue,
+      mood: "discovery",
+    };
+  }
+
+  if (fork === "weaponized") {
+    state.pressure = Math.min(100, state.pressure + 9);
+    state.danger = Math.min(100, state.danger + 12);
+    state.evidence += 1;
+    const clue = `${start.object} provocou reação deliberada da rede quando foi usado como isca ou ferramenta`;
+    ledger.clues = unique([...(ledger.clues || []), clue]);
+    unlockBranchLocation(state, `${start.nextLocation} — acesso provocado pela reação ao objeto`);
+    return {
+      text: `CAPÍTULO CONDICIONAL — A ISCA\n\nEu paro de tratar ${start.object} como algo a ser apenas compreendido e o uso para obrigar alguém a reagir. Funciona. A resposta chega rápido demais para ser coincidência: rota alterada, gente nova aparecendo e uma tentativa clara de recuperar ou neutralizar a peça. Ganho movimento — e anuncio que estou disposto a jogar com as mesmas ferramentas do outro lado.\n\nA rota fica mais curta e muito mais letal.`,
+      dialogue: `Uma mensagem sem assinatura chega pouco depois: “Agora sabemos que você aprendeu a usar o que encontrou. A próxima demonstração será respondida.”`,
+      clue,
+      mood: "tension",
+    };
+  }
+
+  state.lawfulness += 2;
+  state.pressure = Math.min(100, state.pressure + 3);
+  const clue = `${start.object} entrou formalmente em custódia institucional e sua cadeia de responsabilidade agora pode ser auditada`;
+  ledger.clues = unique([...(ledger.clues || []), clue]);
+  return {
+    text: `CAPÍTULO CONDICIONAL — SOB CUSTÓDIA\n\nEu entrego ${start.object} por um canal formal e exijo recibo, nome, horário e responsabilidade. A peça sai das minhas mãos, o que reduz algumas tentações e cria outra forma de risco: de agora em diante, qualquer desaparecimento, troca ou adulteração terá um responsável humano documentado.\n\nA rota em que eu usaria pessoalmente o objeto deixa de existir — a menos que a própria instituição quebre a custódia.`,
+    dialogue: `— Depois de assinar isto, a peça não é mais sua — diz o responsável. Eu guardo a cópia antes de responder: — Justamente por isso quero saber de quem ela passa a ser responsabilidade.`,
+    clue,
+    mood: "mystery",
+  };
+}
+
+function maybeObjectAftermath(start: OfflineStart, state: OfflineGameState, ledger: LedgerData): BranchChapterEvent | undefined {
+  if (!state.objectFork || state.phase < 3 || state.flags.includes("object-aftermath")) return undefined;
+  if (state.turn < 12) return undefined;
+  state.flags.push("object-aftermath");
+
+  if (state.objectFork === "preserved") {
+    state.evidence += 1;
+    const clue = `a preservação de ${start.object} permite comparar uma alteração recente com o estado original e separar manipulação humana de fenômeno anormal`;
+    ledger.clues = unique([...(ledger.clues || []), clue]);
+    return {
+      text: `RETORNO DE ROTA — A PROVA SOBREVIVEU\n\nUma diferença que teria desaparecido se eu tivesse usado ou entregue ${start.object} finalmente se torna visível. O detalhe não resolve o caso sozinho; faz algo melhor: elimina uma explicação confortável e obriga a investigação a seguir a versão mais estranha dos fatos.`,
+      clue,
+      mood: "discovery",
+    };
+  }
+
+  if (state.objectFork === "weaponized") {
+    state.pressure = Math.min(100, state.pressure + 8);
+    state.danger = Math.min(100, state.danger + 10);
+    const clue = `a reação à isca revela quem monitorava ${start.object}, mas também confirma que a rede agora conhece meus hábitos`;
+    ledger.clues = unique([...(ledger.clues || []), clue]);
+    return {
+      text: `RETORNO DE ROTA — A ISCA MORDE DE VOLTA\n\nA armadilha produz a informação que eu queria, mas o outro lado aprende comigo ao mesmo tempo. Reconheço uma vigilância montada para explorar exatamente o comportamento que usei antes. O objeto abriu uma porta; também ensinou alguém a prever como eu atravesso portas.`,
+      clue,
+      mood: "tension",
+    };
+  }
+
+  // Custódia institucional pode ser boa ou péssima, dependendo da força documental já construída.
+  if (state.evidence < 6) {
+    state.pressure = Math.min(100, state.pressure + 7);
+    state.danger = Math.min(100, state.danger + 5);
+    const clue = `${start.object} desapareceu ou foi substituído dentro da custódia oficial antes que existissem provas suficientes para impedir a manobra`;
+    ledger.clues = unique([...(ledger.clues || []), clue]);
+    return {
+      text: `RETORNO DE ROTA — O RECIBO SEM OBJETO\n\nA instituição ainda tem meu comprovante. Já não tem ${start.object}. A assinatura existe, o horário existe e todos os responsáveis dizem ter seguido o procedimento. Entregar a peça não encerrou o problema; apenas moveu a conspiração para dentro de um sistema que sabe produzir aparência de normalidade.`,
+      clue,
+      mood: "tension",
+    };
+  }
+
+  state.evidence += 1;
+  const clue = `a custódia formal de ${start.object} resistiu à tentativa de adulteração e produziu um novo responsável identificável`;
+  ledger.clues = unique([...(ledger.clues || []), clue]);
+  return {
+    text: `RETORNO DE ROTA — A ASSINATURA QUE NÃO PODIA SUMIR\n\nAlguém tenta deslocar ${start.object} sem registro. A tentativa falha porque já existem cópias, horários e responsabilidade externa demais. Pela primeira vez, a burocracia deixa de ser obstáculo e vira armadilha: quem tenta quebrar a cadeia precisa deixar o próprio nome em algum ponto.`,
+    clue,
+    mood: "discovery",
+  };
+}
+
+function chooseEndgameFork(state: OfflineGameState, parsed: ParsedAction): EndgameFork | undefined {
+  if (state.endgameFork || state.phase < 3) return undefined;
+  if (actionUsesIntent(parsed, "report") || state.lawfulness >= 7) return "expose";
+  if (actionUsesIntent(parsed, "hide", "follow", "deceive", "steal") || state.route === "clandestina") return "infiltrate";
+  if (actionUsesIntent(parsed, "fight", "flee") || /destru|queim|fecho|selo|abandono|rompo/.test(parsed.normalized)) return "sever";
+  if (actionUsesIntent(parsed, "occult", "investigate", "read", "observe", "use-item") || state.route === "mistério") return "descend";
+
+  if (state.turn >= 15) {
+    if (state.route === "institucional") return "expose";
+    if (state.route === "confronto" || state.route === "fuga") return "sever";
+    if (state.deception >= 5) return "infiltrate";
+    return "descend";
+  }
+  return undefined;
+}
+
+function openEndgameChapter(start: OfflineStart, state: OfflineGameState, ledger: LedgerData, fork: EndgameFork): BranchChapterEvent {
+  state.endgameFork = fork;
+  state.closedBranches = unique([
+    ...state.closedBranches,
+    ...(["expose", "infiltrate", "sever", "descend"] as EndgameFork[])
+      .filter((other) => other !== fork)
+      .map((other) => `endgame:${other}`),
+  ]);
+  pushBranchHistory(state, `endgame:${fork}:turno-${state.turn}`);
+
+  const relation = state.npcFates[importantNpcKey(start)] || "active";
+  const object = state.objectFork || "preserved";
+  const relText = relation === "protected"
+    ? `${start.secondNpc.name} ainda pode agir como pessoa, não apenas lembrança ou ameaça.`
+    : relation === "hostile"
+      ? `${start.secondNpc.name} conhece o bastante sobre mim para tornar qualquer plano menos seguro.`
+      : `${start.secondNpc.name} não está disponível para corrigir o que eu talvez tenha entendido errado.`;
+  const objText = object === "weaponized"
+    ? `${start.object} já foi usado como arma e o outro lado aprendeu com isso.`
+    : object === "surrendered"
+      ? `${start.object} está ou esteve nas mãos de uma instituição, o que cria rastro e dependência.`
+      : `${start.object} permanece documentado e comparável ao estado original.`;
+
+  if (fork === "expose") {
+    state.route = "institucional";
+    state.evidence += 1;
+    return {
+      text: `ATO FINAL — TORNAR O CASO IMPOSSÍVEL DE APAGAR\n\nEu paro de perseguir uma confissão perfeita e começo a construir redundância: cópias, horários, testemunhas, destinatários diferentes. A estratégia não exige que todo mundo acredite no impossível; exige apenas que apagar a história custe mais do que enfrentá-la. ${relText} ${objText}`,
+      mood: "discovery",
+    };
+  }
+  if (fork === "infiltrate") {
+    state.route = "clandestina";
+    state.deception += 1;
+    state.pressure = Math.min(100, state.pressure + 6);
+    return {
+      text: `ATO FINAL — ENTRAR NA VERSÃO DELES\n\nEm vez de denunciar a rede, ofereço uma versão de mim que ela possa aceitar: informação suficiente para parecer útil, ambição suficiente para parecer recrutável, silêncio suficiente para receber uma porta aberta. ${relText} ${objText}\n\nSe eu errar a dose, não haverá audiência nem segunda explicação.`,
+      mood: "tension",
+    };
+  }
+  if (fork === "sever") {
+    state.route = state.route === "fuga" ? "fuga" : "confronto";
+    state.pressure = Math.min(100, state.pressure + 4);
+    return {
+      text: `ATO FINAL — QUEBRAR A CORRENTE\n\nEu aceito que talvez não consiga possuir toda a verdade. O objetivo muda: impedir que a operação continue usando a mesma passagem, objeto, documento ou pessoa. Isso pode significar destruir prova, fechar uma rota ou abandonar uma resposta para impedir uma catástrofe. ${relText} ${objText}`,
+      mood: "tension",
+    };
+  }
+
+  state.route = "mistério";
+  state.occultExposure += 1;
+  state.danger = Math.min(100, state.danger + 5);
+  return {
+    text: `ATO FINAL — DESCOBRIR A REGRA POR TRÁS DO IMPOSSÍVEL\n\nEu sigo adiante não porque o fenômeno parece seguro, mas porque as pistas finalmente sugerem que existe uma regra. Quero identificar a regra antes de tentar usá-la. ${relText} ${objText}\n\nA diferença entre investigação e suicídio, agora, é continuar tratando cada descoberta como hipótese até ela sobreviver a um teste.`,
+    mood: "mystery",
+  };
+}
+
+function maybeDelayedRelationshipChapter(start: OfflineStart, state: OfflineGameState, ledger: LedgerData): BranchChapterEvent | undefined {
+  if (!state.relationshipFork || state.flags.includes("relationship-delayed")) return undefined;
+  if (state.turn < 14) return undefined;
+  const arc = branchArc(start);
+  if (!arc) return undefined;
+
+  const key = importantNpcKey(start);
+  const fate = state.npcFates[key] || "active";
+  // O capítulo tardio não é preso à escolha inicial. Se o jogador reconstruiu ou destruiu a relação depois,
+  // a história tardia muda de trilho — consequência local, não medidor de karma.
+  const effective: RelationshipFork = fate === "protected" ? "protected" : fate === "hostile" ? "coerced" : "lost";
+  const beat = arc[effective];
+  state.flags.push("relationship-delayed");
+  pushBranchHistory(state, `relationship-delayed:${effective}:${beat.delayedTitle}`);
+  unlockBranchLocation(state, beat.unlockLocation);
+
+  if (effective === "protected") {
+    state.evidence += 2;
+    state.trust = Math.min(10, state.trust + 1);
+  } else if (effective === "coerced") {
+    state.pressure = Math.min(100, state.pressure + 7);
+    state.danger = Math.min(100, state.danger + 6);
+    state.evidence += 1;
+  } else {
+    state.pressure = Math.min(100, state.pressure + 5);
+    state.evidence += 1;
+    if (state.pressure >= 88 && seeded01(hashString(`${state.seed}|npc-fate|${start.id}`)) > 0.45) {
+      state.npcFates[key] = "dead";
+      pushBranchHistory(state, `npc:${start.secondNpc.name}:dead`);
+    }
+  }
+
+  const clue = renderBranchText(beat.delayedClue, start);
+  ledger.clues = unique([...(ledger.clues || []), clue]);
+  ledger.playerNotes = unique([...(ledger.playerNotes || []), `Capítulo tardio: ${beat.delayedTitle}.`]);
+
+  return {
+    text: `CAPÍTULO TARDIO — ${beat.delayedTitle}\n\n${renderBranchText(beat.delayedScene, start)}\n\nEste capítulo substitui as consequências que teriam ocorrido se a relação atual com ${start.secondNpc.name} fosse outra.`,
+    clue,
+    mood: effective === "protected" ? "discovery" : "tension",
+  };
+}
+
+function branchEpilogue(start: OfflineStart, state: OfflineGameState): string {
+  const arc = branchArc(start);
+  const fate = state.npcFates[importantNpcKey(start)] || "active";
+  const relationText: Record<NpcFate, string> = {
+    active: `${start.secondNpc.name} termina o caso ainda tomando decisões próprias, sem virar prêmio nem punição moral.`,
+    protected: `${start.secondNpc.name} chega ao fim vivo e com margem para escolher o que fazer com tudo que sabe. Isso não significa lealdade eterna; significa que minhas ações concretas preservaram uma pessoa e uma fonte de futuro.`,
+    hostile: `${start.secondNpc.name} chega ao fim sabendo exatamente por que não confia em mim. Em algum lugar da cidade existe agora alguém com informações suficientes para me causar problemas por motivos pessoais, não cósmicos.`,
+    missing: `${start.secondNpc.name} não volta para ocupar o lugar que tinha no começo. A ausência altera o caso porque uma pessoa que poderia confirmar, negar ou escolher deixou de estar disponível.`,
+    dead: `${start.secondNpc.name} morreu antes do encerramento. A investigação continua, mas qualquer final que eu alcance precisa carregar o fato de que certas perguntas ficaram sem dono porque eu não cheguei a tempo — ou ajudei a criar o risco.`,
+    escaped: `${start.secondNpc.name} saiu do alcance da investigação e levou consigo parte da verdade. Talvez tenha sido a única decisão sensata disponível a essa pessoa.`,
+  };
+  const objectText: Record<ObjectFork, string> = {
+    preserved: `Eu preservei ${start.object}; por isso algumas conclusões puderam ser comparadas com o que realmente existia no início.`,
+    weaponized: `Eu usei ${start.object} como ferramenta. Consegui respostas que talvez nunca viessem de outro modo e, em troca, ensinei meus adversários sobre mim.`,
+    surrendered: `Eu entreguei ${start.object} a uma instituição. O que aconteceu depois passou a depender de documentos, responsáveis e da capacidade do sistema de resistir à própria infiltração.`,
+  };
+  const endText: Record<EndgameFork, string> = {
+    expose: `No ato final escolhi tornar a história difícil de apagar, não necessariamente fácil de acreditar.`,
+    infiltrate: `No ato final escolhi entrar na estrutura inimiga e aceitar o risco de que a máscara funcionasse bem demais.`,
+    sever: `No ato final escolhi quebrar a cadeia mesmo que parte da verdade precisasse morrer junto com ela.`,
+    descend: `No ato final escolhi seguir a regra oculta mais fundo, tentando compreender antes de tocar no que não era humano.`,
+  };
+  return [
+    relationText[fate],
+    state.objectFork ? objectText[state.objectFork] : undefined,
+    state.endgameFork ? endText[state.endgameFork] : undefined,
+    arc?.finalEcho,
+  ].filter(Boolean).join(" ");
+}
+
 function actionConsequenceText(p: ParsedAction, result: ReturnType<typeof resolveAction>, start: OfflineStart, state: OfflineGameState, origin: GameOrigin): { scene: string; dialogue: string; sanityDelta: number; newClue?: string; secret?: string; location?: string; mood: AudioMood } {
   const outcomeLead = {
     strong: "Minha abordagem funciona melhor do que eu esperava.",
@@ -2229,6 +2726,10 @@ function evaluateLethalRisk(
   if (state.pressure >= 60) delta += 4;
   if (state.pressure >= 85) delta += 7;
   if (state.phase >= 3) delta += 3;
+  const branchNpcFate = state.npcFates[importantNpcKey(start)] || "active";
+  if (state.objectFork === "weaponized" && hasIntent("use-item", "occult", "steal")) delta += 8;
+  if (branchNpcFate === "hostile" && hasIntent("follow", "travel", "hide", "threaten", "fight")) delta += 5;
+  if (state.endgameFork === "infiltrate" && (parsed.aggressive || hasIntent("fight", "threaten"))) delta += 10;
   if (parsed.cautious) delta -= 8;
   if (parsed.specificity >= 4) delta -= 3;
   if (outcome.success === "strong") delta -= 4;
@@ -2251,6 +2752,36 @@ function evaluateLethalRisk(
     state.deathEndingId = "dead-arc";
     state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: repetiu um risco explicitamente sinalizado até perder a margem de segurança.`]);
     return { deathEndingId: "dead-arc", scene: arc.deathScene };
+  }
+
+  // Usar a peça central como isca/ferramenta cria atalhos poderosos, mas repetir o gesto depois que a rede aprendeu o padrão pode matar.
+  if (state.objectFork === "weaponized" && hasIntent("use-item", "occult") && outcome.success === "fail" && state.danger >= 65) {
+    state.deathEndingId = hasIntent("occult") ? "dead-occult" : "dead-arc";
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: reutilizou a peça já exposta como arma quando o adversário conhecia esse padrão.`]);
+    return {
+      deathEndingId: state.deathEndingId,
+      scene: `A primeira vez que usei ${start.object} como isca, forcei o outro lado a reagir. Desta vez, ele reage antes de mim. O plano falha não por azar, mas porque repeti uma ferramenta depois de ensinar ao adversário como eu a empregava.`,
+    };
+  }
+
+  // Infiltração não oferece proteção de roteiro: quebrar a cobertura com violência explícita em ambiente hostil encurta a história.
+  if (state.endgameFork === "infiltrate" && hasIntent("fight", "threaten") && outcome.success === "fail" && state.pressure >= 55) {
+    state.deathEndingId = "dead-ambush";
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: rompeu a própria cobertura com confronto direto durante infiltração.`]);
+    return {
+      deathEndingId: "dead-ambush",
+      scene: `Eu entrei porque parecia útil, discreto e controlável. No instante em que transformo a infiltração em confronto aberto, todas as saídas que dependiam dessa impressão desaparecem. A emboscada não precisa ser brilhante; só precisa acontecer num lugar que eu mesmo aceitei entrar sem apoio.`,
+    };
+  }
+
+  // Um NPC que o jogador tornou hostil conhece hábitos, locais e frases. Ignorar essa informação sob pressão alta pode ser fatal.
+  if (branchNpcFate === "hostile" && hasIntent("follow", "travel", "hide") && outcome.success === "fail" && state.pressure >= 78 && !parsed.cautious) {
+    state.deathEndingId = "dead-pressure";
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: tratou um NPC hostil e informado como se ainda fosse fonte neutra.`]);
+    return {
+      deathEndingId: "dead-pressure",
+      scene: `${start.secondNpc.name} não precisava ser mais forte do que eu. Bastava conhecer meus horários, minha curiosidade e o lugar que eu escolheria vigiar. Eu dei à pessoa errada informação suficiente sobre mim e depois me comportei como se a relação ainda fosse neutra.`,
+    };
   }
 
   // Mexer no oculto sem conhecimento suficiente fica progressivamente mais perigoso.
@@ -2360,6 +2891,22 @@ function endingNarrativeScore(end: OfflineEnding, state: OfflineGameState): numb
   if (state.route === "alianças" && ["trusted-network", "protector", "accidental-hero"].includes(end.id)) score += 12;
   if (state.route === "confronto" && ["hard-boiled", "wanted", "mob-justice"].includes(end.id)) score += 10;
   if (state.route === "fuga" && end.id === "fugitive") score += 15;
+
+  // V3.3: o ato final e o destino concreto da prova/NPC pesam mais que uma noção abstrata de bondade.
+  if (state.endgameFork === "expose" && ["case-solved", "public-scandal", "institutional"].includes(end.id)) score += 18;
+  if (state.endgameFork === "infiltrate" && ["conspiracy-recruited", "double-agent", "private-truth", "blackmail", "master-liar"].includes(end.id)) score += 18;
+  if (state.endgameFork === "sever" && ["burned-evidence", "refusal", "fugitive", "accidental-hero", "hard-boiled"].includes(end.id)) score += 16;
+  if (state.endgameFork === "descend" && ["threshold", "collector", "watcher", "scarred-survivor", "obsession"].includes(end.id)) score += 18;
+
+  if (state.objectFork === "preserved" && ["case-solved", "private-truth", "public-scandal", "collector"].includes(end.id)) score += 8;
+  if (state.objectFork === "weaponized" && ["blackmail", "conspiracy-recruited", "double-agent", "hard-boiled", "wanted"].includes(end.id)) score += 8;
+  if (state.objectFork === "surrendered" && ["institutional", "case-solved", "public-scandal"].includes(end.id)) score += 8;
+
+  const branchNpcFate = state.npcFates[importantNpcKey(getStart(state))];
+  if (branchNpcFate === "protected" && ["trusted-network", "protector", "accidental-hero"].includes(end.id)) score += 9;
+  if (branchNpcFate === "hostile" && ["betrayed", "hard-boiled", "wanted", "cold-truth"].includes(end.id)) score += 7;
+  if ((branchNpcFate === "missing" || branchNpcFate === "dead") && ["private-truth", "scarred-survivor", "cold-truth", "obsession"].includes(end.id)) score += 7;
+
   score += Math.min(12, state.evidence);
   if (["merciful", "hard-boiled", "cold-truth", "mob-justice"].includes(end.id)) {
     // Finais comportamentais só sobem ao topo quando o padrão foi repetido; uma única decisão ruim/boa não redefine a crônica.
@@ -2390,10 +2937,14 @@ function maybeEnding(origin: GameOrigin, state: OfflineGameState, ledger: Ledger
 function relationshipEpilogue(start: OfflineStart, state: OfflineGameState): string {
   const primary = state.npcTrust[normalizeText(start.npc.name)] ?? 0;
   const secondary = state.npcTrust[normalizeText(start.secondNpc.name)] ?? 0;
+  const secondaryFate = state.npcFates[normalizeText(start.secondNpc.name)] || "active";
   const lines: string[] = [];
   if (primary >= 4) lines.push(`${start.npc.name} continua ligado à minha história. Não porque eu tenha sido sempre gentil, mas porque, nos momentos que importavam para essa pessoa, construí crédito suficiente para ser ouvido.`);
   else if (primary <= -4) lines.push(`${start.npc.name} não esquece o modo como conduzi o caso. Mesmo que minhas escolhas tenham funcionado em outros lugares, essa relação termina quebrada — e algumas portas fecham especificamente por causa disso.`);
-  if (secondary >= 4) lines.push(`${start.secondNpc.name} torna-se uma das poucas pessoas capazes de confirmar partes da história que pareceriam delírio para qualquer estranho.`);
+  if (secondaryFate === "dead") lines.push(`${start.secondNpc.name} não chega ao epílogo. O que essa pessoa sabia precisa ser reconstruído por vestígios, e nenhuma pontuação de confiança transforma morte em simples penalidade numérica.`);
+  else if (secondaryFate === "missing") lines.push(`${start.secondNpc.name} permanece desaparecido ao fim desta etapa; a ausência fecha respostas e pode abrir uma investigação totalmente diferente.`);
+  else if (secondaryFate === "hostile") lines.push(`${start.secondNpc.name} sobrevive com motivos pessoais para agir contra mim. Isso vale mais que qualquer rótulo abstrato de “vilão”: é uma relação concreta que eu danifiquei.`);
+  else if (secondary >= 4 || secondaryFate === "protected") lines.push(`${start.secondNpc.name} torna-se uma das poucas pessoas capazes de confirmar partes da história que pareceriam delírio para qualquer estranho.`);
   else if (secondary <= -4) lines.push(`${start.secondNpc.name} sobrevive à investigação com uma versão de mim que eu não controlo; em certos círculos, é essa versão que passa a circular.`);
   if (!lines.length) lines.push(`Nem ${start.npc.name} nem ${start.secondNpc.name} se tornam simples marcadores de “bom” ou “mau”. Cada um guarda o que fiz diretamente com eles, e essas lembranças seguem produzindo pequenas consequências depois do caso.`);
   return lines.join(" ");
@@ -2405,12 +2956,14 @@ function endingTurn(origin: GameOrigin, state: OfflineGameState, ledger: LedgerD
   const arc = storyArc(start);
   const expansion = OFFLINE_ENDING_EXPANSIONS[end.id] || "O caso termina, mas suas consequências continuam nas pessoas e lugares que sobreviveram a ele.";
   const relationship = relationshipEpilogue(start, state);
+  const branchOutcome = branchEpilogue(start, state);
   const isDeath = end.id.startsWith("dead-") || end.id === "vanished" || end.id === "sacrifice";
   const scene = [
     deathScene,
     end.epilogue(origin, state, ledger),
     expansion,
     isDeath ? `O mundo não encerra junto comigo. ${start.npc.name}, ${start.secondNpc.name} e as pessoas tocadas pelo caso continuam tomando decisões a partir do que deixei para trás.` : relationship,
+    branchOutcome,
     arc.epilogueEcho,
   ].filter(Boolean).join("\n\n");
   const finalText = formatTurn(
@@ -2418,8 +2971,8 @@ function endingTurn(origin: GameOrigin, state: OfflineGameState, ledger: LedgerD
     isDeath
       ? `Não existe proteção de protagonista em Loen. Um risco compreensível pode ser aceito; uma imprudência repetida ou uma falha diante de perigo letal pode encerrar a história.`
       : `“Toda investigação termina duas vezes: quando encontramos uma resposta e quando decidimos o que fazer com ela.”`,
-    `${ledger.location} | Epílogo | Seed: ${state.campaignSeed} | Fim alcançado: ${end.title} | Evidências: ${state.evidence} | Ferimentos: ${state.wounds}/3`,
-    `FIM — ${end.title}\n\nEsta crônica alcançou um dos ${ENDINGS.length} desfechos do Motor Local. O prólogo, as relações, a rota de investigação, os riscos assumidos e os erros acumulados determinaram como ela terminou.`
+    `${ledger.location} | Epílogo | Seed: ${state.campaignSeed} | Fim alcançado: ${end.title} | Evidências: ${state.evidence} | Ferimentos: ${state.wounds}/3 | Rota final: ${state.endgameFork || "não definida"}`,
+    `FIM — ${end.title}\n\nEsta crônica alcançou um dos ${ENDINGS.length} desfechos do Motor Local. Os capítulos vistos foram apenas os liberados pelas decisões desta campanha; as rotas fechadas não aconteceram fora de cena. Relações específicas, destino da prova, estratégia final, risco e erros concretos determinaram como a história terminou.`
   );
   ledger.offlineState = state;
   return { text: finalText, ledger, mood: isDeath ? "tension" : "discovery", suggestedActions: [], ending: end };
@@ -2485,6 +3038,10 @@ export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger
   if (parsed.promise && result.success !== "fail") npcDelta += 1;
   state.npcTrust[npcKey] = Math.max(-10, Math.min(10, (state.npcTrust[npcKey] || 0) + npcDelta));
   const personalTrust = state.npcTrust[npcKey];
+  const interactionIntent = actionUsesIntent(parsed, "question", "persuade", "protect", "threaten", "fight", "deceive", "steal");
+  if (parsed.target || interactionIntent) {
+    state.npcInteractions[npcKey] = (state.npcInteractions[npcKey] || 0) + 1;
+  }
 
   upsertNpc(ledger, {
     name: npcName,
@@ -2507,6 +3064,19 @@ export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger
       { reason: "Contato imprudente com um fenômeno que o personagem ainda não compreende.", delta: consequence.sanityDelta, timestamp: Date.now() },
     ];
   }
+
+  const fateShiftText = updateNpcFateFromAction(start, state, parsed, result);
+  const relationshipFork = chooseRelationshipFork(start, state, parsed, result);
+  const relationshipChapter = relationshipFork ? openRelationshipChapter(start, state, ledger, relationshipFork) : undefined;
+
+  const objectFork = chooseObjectFork(state, parsed, result);
+  const objectChapter = objectFork ? openObjectChapter(start, state, ledger, objectFork) : undefined;
+
+  const endgameFork = chooseEndgameFork(state, parsed);
+  const endgameChapter = endgameFork ? openEndgameChapter(start, state, ledger, endgameFork) : undefined;
+
+  const delayedRelationshipChapter = maybeDelayedRelationshipChapter(start, state, ledger);
+  const objectAftermath = maybeObjectAftermath(start, state, ledger);
 
   const lethalRisk = evaluateLethalRisk(parsed, result, start, state);
   if (lethalRisk.deathEndingId) {
@@ -2543,19 +3113,43 @@ export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger
   const statusPressure = state.pressure >= 75 ? "ameaça imediata" : state.pressure >= 45 ? "atenção hostil crescente" : "tensão controlável";
   const sceneParts = [
     consequence.scene,
+    fateShiftText ? `RELAÇÃO ALTERADA — ${fateShiftText}` : undefined,
+    relationshipChapter?.text,
+    objectChapter?.text,
+    endgameChapter?.text,
+    delayedRelationshipChapter?.text,
+    objectAftermath?.text,
     lethalRisk.injuryText ? `CONSEQUÊNCIA FÍSICA — ${lethalRisk.injuryText}` : undefined,
     lethalRisk.warningText ? `RISCO — ${lethalRisk.warningText}` : undefined,
     phaseEvent?.text,
     intermediateEvent?.text ? `EVENTO — ${intermediateEvent.text}` : undefined,
     agendaEvent?.text ? `MOVIMENTO DE NPC — ${agendaEvent.text}` : undefined,
   ].filter(Boolean);
-  const dialogueParts = [consequence.dialogue, intermediateEvent?.dialogue, agendaEvent?.dialogue].filter(Boolean);
-  const moods = [consequence.mood, intermediateEvent?.mood, agendaEvent?.mood].filter(Boolean) as AudioMood[];
+  const dialogueParts = [
+    consequence.dialogue,
+    relationshipChapter?.dialogue,
+    objectChapter?.dialogue,
+    endgameChapter?.dialogue,
+    delayedRelationshipChapter?.dialogue,
+    objectAftermath?.dialogue,
+    intermediateEvent?.dialogue,
+    agendaEvent?.dialogue,
+  ].filter(Boolean);
+  const moods = [
+    consequence.mood,
+    relationshipChapter?.mood,
+    objectChapter?.mood,
+    endgameChapter?.mood,
+    delayedRelationshipChapter?.mood,
+    objectAftermath?.mood,
+    intermediateEvent?.mood,
+    agendaEvent?.mood,
+  ].filter(Boolean) as AudioMood[];
   const finalMood: AudioMood = moods.includes("tension") ? "tension" : moods.includes("discovery") ? "discovery" : moods.includes("mystery") ? "mystery" : "calm";
   const text = formatTurn(
     sceneParts.join("\n\n"),
     dialogueParts.join("\n\n") || consequence.dialogue,
-    `${ledger.location} | ${ledger.timeAndWeather} | Seed: ${state.campaignSeed} | Evidências: ${state.evidence} | Ferimentos: ${state.wounds}/3 | Risco: ${state.danger}/100 | Eventos: ${state.eventHistory.length} | ${statusPressure}`,
+    `${ledger.location} | ${ledger.timeAndWeather} | Seed: ${state.campaignSeed} | Evidências: ${state.evidence} | Ferimentos: ${state.wounds}/3 | Risco: ${state.danger}/100 | Capítulos: ${state.branchHistory.length} | Rotas fechadas: ${state.closedBranches.length} | Eventos: ${state.eventHistory.length} | ${statusPressure}`,
     dilemmaText(options)
   );
 
@@ -2568,4 +3162,7 @@ export const OFFLINE_ENGINE_STATS = {
   intents: Object.keys(INTENT_WORDS).length,
   events: INTERMEDIATE_EVENTS.length,
   agendas: NPC_AGENDA_GOALS.length,
+  relationshipBranchChapters: OFFLINE_BRANCH_STATS.relationshipVariants,
+  delayedBranchChapters: OFFLINE_BRANCH_STATS.delayedChapters,
+  structuralRouteCombinations: STARTS.length * 3 * 3 * 4,
 };
