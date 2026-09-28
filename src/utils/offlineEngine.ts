@@ -1,4 +1,5 @@
 import { AudioMood, GameOrigin, LedgerData, NPCRecord } from "../types";
+import { OFFLINE_ENDING_EXPANSIONS, OFFLINE_STORY_ARCS, type OfflineStoryArc } from "../data/offlineNarrative";
 
 export type LocalIntent =
   | "observe"
@@ -91,6 +92,16 @@ export interface OfflineGameState {
   originTags?: OriginExpertiseTag[];
   /** Ocupação do corpo/local de Loen; não substitui a identidade anterior do transmigrado. */
   bodyRole?: string;
+  /** Risco acumulado: não é moralidade; mede quanto perigo real o jogador está puxando para si. */
+  danger: number;
+  /** Imprudência repetida aumenta a chance de consequências físicas e morte. */
+  recklessness: number;
+  /** Ferimentos persistentes. Três ferimentos graves normalmente encerram a crônica. */
+  wounds: number;
+  /** Erros fatais ou quase fatais registrados para manter continuidade. */
+  fatalMistakes: string[];
+  /** Final de morte imediato escolhido pelo motor, quando aplicável. */
+  deathEndingId?: string;
   /** Último foco inferido para resolver referências como “ele”, “ela” ou “isso” em turnos seguintes. */
   focusNpc?: string;
   focusItem?: string;
@@ -582,7 +593,7 @@ const INTENT_WORDS: Record<LocalIntent, string[]> = {
   read: ["leio", "decifro", "traduzo", "estudo", "interpreto", "código", "cifra", "documento"],
   "use-item": ["uso", "utilizo", "abro com", "acendo", "mostro", "entrego", "quebro", "guardo", "escondo o item"],
   travel: ["vou para", "entro", "subo", "desço", "atravesso", "caminho até", "retorno", "sigo para", "saio para"],
-  wait: ["espero", "aguardo", "fico parado", "observo de longe", "deixo passar"],
+  wait: ["espero", "aguardo", "fico parado", "observo de longe", "deixo passar", "descanso", "trato meus ferimentos", "cuido dos ferimentos", "me recupero"],
   report: ["chamo a polícia", "aviso a polícia", "denuncio", "conto ao inspetor", "procuro a igreja", "peço reforço", "autoridades"],
   occult: ["ritual", "invoco", "magia", "feitiço", "espírito", "beyonder", "poção", "adivinhação"],
   improvise: [],
@@ -604,7 +615,7 @@ const INTENT_PATTERNS: Partial<Record<LocalIntent, RegExp[]>> = {
   read: [/\b(?:lei|leio|ler|decifr|traduz|estud|interpret|cifr)[a-z0-9'-]*\b/],
   "use-item": [/\b(?:utiliz|acend|entreg|guard|quebr)[a-z0-9'-]*\b/, /\buso\s+(?:o|a|um|uma|meu|minha)\b/],
   travel: [/\b(?:entro|subo|desco|atravess|caminh|retorn|volto)[a-z0-9'-]*\b/, /\b(?:vou|sigo)\s+para\b/],
-  wait: [/\b(?:esper|aguard)[a-z0-9'-]*\b/, /\bfico\s+(?:parado|quieto|a distancia)\b/],
+  wait: [/\b(?:esper|aguard|descans|recuper)[a-z0-9'-]*\b/, /\b(?:trato|cuido)\s+(?:dos\s+)?(?:meus\s+)?ferimentos\b/, /\bfico\s+(?:parado|quieto|a distancia)\b/],
   report: [/\b(?:denunci|autoridad|polici|inspetor|reforco)[a-z0-9'-]*\b/, /\b(?:aviso|conto|informo)\s+(?:a|ao)\s+(?:policia|igreja|guarda|autoridade)\b/],
   occult: [/\b(?:ritual|invoc|magia|feitic|espirit|beyonder|pocao|adivinh|mistic|ocult)[a-z0-9'-]*\b/],
 };
@@ -643,6 +654,13 @@ const ATTRIBUTE_BY_INTENT: Record<LocalIntent, AttributeKey> = {
 };
 
 const ENDINGS: OfflineEnding[] = [
+  ending("dead-arc", "A Escolha que Não Permitia Segunda Tentativa", s => s.deathEndingId === "dead-arc", () => `O perigo estava diante de mim e havia sinais suficientes para reconhecê-lo. Ainda assim, avancei como se intenção pudesse substituir preparo. Não substituiu.`),
+  ending("dead-ambush", "Uma Bala na Névoa", s => s.deathEndingId === "dead-ambush", () => `Eu sabia que alguém reagia aos meus passos. Escolhi o confronto quando já estava cercado. O primeiro disparo decidiu uma discussão que minha coragem não tinha como vencer.`),
+  ending("dead-occult", "Quando o Abismo Respondeu", s => s.deathEndingId === "dead-occult", () => `Tratei um fenômeno que eu não compreendia como se curiosidade fosse proteção. A resposta veio inteira demais para uma mente e um corpo humanos.`),
+  ending("dead-combat", "Sangue no Paralelepípedo", s => s.deathEndingId === "dead-combat", () => `A briga deixou de ser investigação no instante em que a diferença de força, posição ou número ficou evidente. Continuei mesmo assim. A cidade não premiou a ousadia; apenas recolheu o corpo.`),
+  ending("dead-chase", "O Último Passo", s => s.deathEndingId === "dead-chase", () => `Eu já estava cansado, pressionado e sem margem para erro. Transformei perseguição em corrida cega. Um único passo errado bastou para fazer todo o resto deixar de importar.`),
+  ending("dead-wounds", "Três Erros, Nenhuma Quarta Chance", s => s.deathEndingId === "dead-wounds", s => `Eu sobrevivi ao primeiro ferimento e confundi sobrevivência com invulnerabilidade. O segundo deveria ter sido o aviso definitivo. O terceiro encerrou a crônica.`),
+  ending("dead-pressure", "Eles Já Estavam Esperando", s => s.deathEndingId === "dead-pressure", () => `A pressão ao meu redor já havia deixado de ser abstrata. Rotas estavam vigiadas, nomes circulavam e pessoas sabiam onde me encontrar. Agi como se ainda tivesse anonimato. Não tinha.`),
   ending("case-solved", "O Caso Encerrado à Luz do Dia", s => s.evidence >= 9 && s.lawfulness >= 4 && s.violence < 5, (_o, s) => `Reuni provas suficientes para transformar rumores em um caso que sobreviveria à luz de um tribunal. Quando a névoa finalmente cedeu, ${s.evidence} peças do quebra-cabeça estavam catalogadas e a conspiração já não dependia da minha palavra.`),
   ending("private-truth", "A Verdade que Não Cabe num Processo", s => s.evidence >= 8 && s.lawfulness < 4 && s.occultExposure < 7, () => `Descobri quem movia as peças, mas compreendi que levar tudo às autoridades destruiria inocentes e alertaria gente poderosa demais. Fechei o caso para o mundo e guardei a verdade onde apenas eu poderia encontrá-la.`),
   ending("watcher", "O Vigia da Névoa", s => s.curiosity >= 8 && s.violence <= 3 && s.occultExposure >= 4, () => `Eu poderia ter ido embora. Em vez disso, escolhi observar. Passei a reconhecer padrões na névoa, horários impossíveis e nomes que nunca apareciam duas vezes. Não venci o mistério; tornei-me alguém capaz de vê-lo chegar.`),
@@ -1249,6 +1267,26 @@ function startAffinity(start: OfflineStart, tags: OriginExpertiseTag[]): number 
   return tags.reduce((score, tag) => score + (affinities.includes(tag) ? (tag === "legal" || tag === "occult-studies" ? 3 : 2) : 0), 0);
 }
 
+
+function storyArc(start: OfflineStart): OfflineStoryArc {
+  return OFFLINE_STORY_ARCS[start.id] || {
+    opening: `O incidente em ${start.location} começa pequeno e imediatamente errado.`,
+    bodyMemory: `O corpo conhece a rotina de ${start.role}, mas não possui explicação para o que está acontecendo.`,
+    phase1: `A primeira pista prova que o incidente não é isolado e aponta para ${start.nextLocation}.`,
+    phase1Clue: `o incidente inicial se conecta diretamente a ${start.nextLocation}`,
+    phase2Trust: `Uma fonte decide confiar em mim e confirma que ${start.secret}.`,
+    phase2Distrust: `As versões entram em conflito e alguém usa a investigação para plantar uma pista conveniente.`,
+    phase2ClueTrust: start.secret,
+    phase2ClueDistrust: `uma pista foi manipulada para controlar a direção da investigação`,
+    phase3: `Os rastros convergem para ${start.nextLocation}, onde a escala real do caso finalmente aparece.`,
+    phase3Clue: `o ponto de convergência da operação é ${start.nextLocation}`,
+    fatalWarning: `O cenário deixa claro que avançar sem preparação pode ser fatal.`,
+    hazardTerms: [],
+    deathScene: `A escolha imprudente cobra o preço antes que eu tenha chance de corrigir o erro.`,
+    epilogueEcho: `O primeiro detalhe nunca deixa de voltar quando penso em como tudo começou.`,
+  };
+}
+
 function backgroundNarrative(origin: GameOrigin): string {
   const tags = inferOriginTags(origin);
   const pieces: string[] = [];
@@ -1265,14 +1303,28 @@ function backgroundNarrative(origin: GameOrigin): string {
 function openingIdentity(origin: GameOrigin, start: OfflineStart): string {
   const name = origin.playerName || "um desconhecido";
   const bg = earthBackground(origin);
+  const arc = storyArc(start);
   if (origin.originType === "Transmigrado da Terra") {
-    const past = bg ? `Na Terra, eu era ${bg}.` : "Na Terra, eu tinha outra vida — ainda consigo lembrar dela.";
-    return `Meu nome é ${name}. ${past} Agora desperto em Loen dentro do corpo de ${start.role}. As memórias práticas deste corpo existem em fragmentos — rotinas, nomes, caminhos — mas não apagam quem eu era antes. ${backgroundNarrative(origin)}`.trim();
+    const past = bg ? `Na Terra, eu era ${bg}.` : "Na Terra, eu tinha outra vida — ainda consigo lembrar dela em detalhes demais para chamar de sonho.";
+    return [
+      `Meu nome é ${name}. ${past}`,
+      `A consciência volta antes que eu entenda o corpo. Primeiro vêm sensações que não reconheço; depois palavras, nomes de ruas e hábitos que chegam como lembranças emprestadas. Eu sei onde estou sem jamais ter estado aqui. Sei como estas mãos trabalham sem ter aprendido o ofício. Só então a ideia impossível se torna inevitável: eu despertei em Loen no corpo de ${start.role}.`,
+      arc.bodyMemory,
+      `As memórias deste corpo não apagam as minhas. Elas se encaixam ao redor delas, às vezes úteis, às vezes íntimas demais. ${backgroundNarrative(origin)}`,
+    ].join("\n\n").trim();
   }
   if (origin.originType === "Amnésico Humano") {
-    return `Meu nome é ${name}, ou pelo menos é o nome que consigo sustentar. Desperto como ${start.role}, cercado por memórias incompletas que não sei distinguir de hábito, medo ou invenção.`;
+    return [
+      `Meu nome é ${name}, ou pelo menos é o nome que consigo sustentar sem hesitar.`,
+      `Acordo como ${start.role} com memórias que chegam sem ordem: uma rua, um rosto, o peso de uma chave, medo sem causa. Não sei quais lembranças são minhas e quais são apenas hábitos deixados no corpo.`,
+      arc.bodyMemory,
+    ].join("\n\n");
   }
-  return `Eu sou ${name}, ${start.role}. Minha vida até aqui foi mundana o bastante para que o que acontece agora pareça uma ruptura, não uma continuação.`;
+  return [
+    `Eu sou ${name}, ${start.role}. Até hoje minha vida coube nas regras conhecidas de Loen.`,
+    arc.bodyMemory,
+    `O que acontece agora rompe essa normalidade de uma forma que nenhuma superstição cotidiana consegue explicar.`,
+  ].join("\n\n");
 }
 
 function expertiseBonus(origin: GameOrigin, parsed: ParsedAction): number {
@@ -1456,6 +1508,10 @@ function baseState(origin: GameOrigin, start: OfflineStart): OfflineGameState {
     earthBackground: earthBackground(origin) || undefined,
     originTags: inferOriginTags(origin),
     bodyRole: start.role,
+    danger: 0,
+    recklessness: 0,
+    wounds: 0,
+    fatalMistakes: [],
   };
 }
 
@@ -1511,6 +1567,11 @@ function upgradeOfflineState(origin: GameOrigin, previous: any, start: OfflineSt
     earthBackground: previous.earthBackground || earthBackground(origin) || undefined,
     originTags: previous.originTags || inferOriginTags(origin),
     bodyRole: previous.bodyRole || start.role,
+    danger: Number(previous.danger || 0),
+    recklessness: Number(previous.recklessness || 0),
+    wounds: Number(previous.wounds || 0),
+    fatalMistakes: [...(previous.fatalMistakes || [])],
+    deathEndingId: previous.deathEndingId,
   };
 }
 
@@ -1546,6 +1607,12 @@ function localOptions(start: OfflineStart, state: OfflineGameState, origin?: Gam
     ],
   ];
   let pool = [...pools[Math.min(state.phase, pools.length - 1)]];
+  if (state.wounds >= 2) {
+    pool[0] = `[PERCEPÇÃO] Recuar para um lugar seguro, tratar os ferimentos e reorganizar as pistas antes de arriscar outra vez.`;
+  } else if (state.wounds === 1 && state.danger >= 55) {
+    pool[0] = `[PERCEPÇÃO] Fazer uma pausa curta, cuidar do ferimento e observar se alguém está aproveitando minha vulnerabilidade.`;
+  }
+
   if (state.phase === 0 && origin?.originType === "Transmigrado da Terra") {
     const tags = inferOriginTags(origin);
     if (tags.includes("legal")) {
@@ -1605,10 +1672,11 @@ export function startOfflineChronicle(origin: GameOrigin, initialLedger: LedgerD
 
   const options = localOptions(start, state, origin);
   const identity = openingIdentity(origin, start);
+  const arc = storyArc(start);
   const text = formatTurn(
-    `${identity}\n\n${start.hook.charAt(0).toUpperCase()}${start.hook.slice(1)}. Tenho comigo ${start.object}. Antes que eu consiga organizar os pensamentos, noto que ${start.threat}.\n\nNão há explicação confortável. Ainda sou uma pessoa comum, sem Poção e sem conhecimento confiável sobre Beyonders; tudo o que tenho são meus sentidos, as experiências que realmente possuo e a decisão de não ignorar o detalhe errado.`,
+    `${identity}\n\n${arc.opening}\n\nO fato bruto é simples de dizer e difícil de aceitar: ${start.hook}. Tenho comigo ${start.object}. Antes que eu consiga organizar os pensamentos, noto que ${start.threat}.\n\nNão há explicação confortável. Ainda sou uma pessoa comum, sem Poção e sem conhecimento confiável sobre Beyonders. Isso importa: neste mundo, coragem não substitui preparo. O objeto e o fenômeno diante de mim já são anormais o bastante para que tocar, abrir, ingerir ou forçar alguma coisa sem entender o risco possa ter consequência física real.`,
     `— Não devia estar olhando para isso — diz ${start.npc.name}, ${start.npc.role}. A voz tenta soar firme, mas há tensão demais no modo como me encara. — Se quiser sair daqui inteiro, esqueça o que viu.`,
-    `${start.location} | ${start.time} | Seed: ${state.campaignSeed} | Pressão: baixa, atenção indesejada começando a crescer`,
+    `${start.location} | ${start.time} | Seed: ${state.campaignSeed} | Pressão: baixa | Risco físico: baixo | Atenção indesejada começando a crescer`,
     dilemmaText(options)
   );
 
@@ -1899,6 +1967,12 @@ function applyIntentState(state: OfflineGameState, p: ParsedAction, outcome: Ret
   if (p.promise) state.trust += outcome.success === "fail" ? 0 : 1;
   if (hasIntent("occult")) state.occultExposure += 2;
 
+  if (hasIntent("wait") && outcome.success !== "fail" && state.wounds > 0 && state.pressure < 70) {
+    state.wounds = Math.max(0, state.wounds - 1);
+    state.danger = Math.max(0, state.danger - 15);
+    state.recklessness = Math.max(0, state.recklessness - 1);
+  }
+
   state.pressure = Math.max(0, Math.min(100, state.pressure));
   state.trust = Math.max(-10, Math.min(10, state.trust));
   state.phase = Math.min(3, Math.floor(state.turn / 4));
@@ -2081,66 +2155,274 @@ function intentLabel(intent: LocalIntent): string {
 
 function phaseTransitionEvent(start: OfflineStart, previousPhase: number, state: OfflineGameState, ledger: LedgerData): { text: string; clue?: string } | undefined {
   if (state.phase <= previousPhase) return undefined;
+  const arc = storyArc(start);
 
   if (state.phase === 1) {
     upsertNpc(ledger, {
       name: start.secondNpc.name,
       role: start.secondNpc.role,
-      attitude: "cauteloso e atento",
-      conversationMemory: ["Entrou na investigação quando as pistas deixaram de parecer um incidente isolado."],
+      attitude: state.trust >= 0 ? "cauteloso, mas disposto a falar" : "cauteloso e desconfiado",
+      conversationMemory: ["Entrou na investigação quando o incidente inicial revelou uma segunda camada."],
       lastLocationMet: ledger.location,
     });
-    const clue = `${start.secondNpc.name} confirma que ${start.nextLocation} já apareceu em outro episódio suspeito.`;
     return {
-      text: `A investigação muda de escala. ${start.secondNpc.name}, ${start.secondNpc.role}, entra no quadro e menciona ${start.nextLocation} sem que eu tenha dito esse nome primeiro. Pela primeira vez, tenho certeza de que o incidente inicial faz parte de algo maior.`,
-      clue,
+      text: `${arc.phase1}\n\n${start.secondNpc.name}, ${start.secondNpc.role}, deixa de ser apenas mais um nome no cenário. A maneira como essa pessoa entra no caso depende do que fiz até aqui — e ela já percebeu se costumo proteger, pressionar ou mentir para obter respostas.`,
+      clue: arc.phase1Clue,
     };
   }
 
   if (state.phase === 2) {
     state.pressure = Math.min(100, state.pressure + 8);
-    const clue = `Duas fontes independentes apontam para a mesma conclusão: ${start.secret}.`;
+    // Não existe medidor moral binário. A virada depende da relação construída, confiança e
+    // do modo como o jogador tratou as pessoas concretas desta história.
+    const primaryTrust = state.npcTrust[normalizeText(start.npc.name)] ?? 0;
+    const secondaryTrust = state.npcTrust[normalizeText(start.secondNpc.name)] ?? 0;
+    const relationship = state.trust + primaryTrust + secondaryTrust;
+    const trustedRoute = relationship >= 1 && state.deception < 7;
+    const text = trustedRoute ? arc.phase2Trust : arc.phase2Distrust;
+    const clue = trustedRoute ? arc.phase2ClueTrust : arc.phase2ClueDistrust;
     ledger.secretsDiscovered = unique([...(ledger.secretsDiscovered || []), start.secret]);
-    return {
-      text: `As versões começam a convergir de uma maneira desconfortável. O que antes parecia superstição agora tem logística, horários e pessoas protegendo o mesmo segredo. A frase que eu evitava formular torna-se difícil de negar: ${start.secret}.`,
-      clue,
-    };
+    state.flags = unique([...state.flags, trustedRoute ? "phase2-trust-route" : "phase2-distrust-route"]);
+    return { text, clue };
   }
 
   if (state.phase === 3) {
     state.pressure = Math.min(100, state.pressure + 12);
-    const clue = `O ponto de convergência do caso é ${start.nextLocation}; quem controla esse lugar controla a saída da investigação.`;
+    state.danger = Math.min(100, state.danger + 12);
     return {
-      text: `Chego à fase em que continuar observando já é uma escolha. Os rastros convergem para ${start.nextLocation}. Pessoas que antes mentiam separadamente agora parecem obedecer à mesma urgência, e alguém começa a limpar as provas antes de mim. O próximo erro pode encerrar o caso — ou me transformar em parte dele.`,
-      clue,
+      text: `${arc.phase3}\n\n${arc.fatalWarning}`,
+      clue: arc.phase3Clue,
     };
   }
 
   return undefined;
 }
 
+
+interface LethalRiskResult {
+  deathEndingId?: string;
+  scene?: string;
+  injuryText?: string;
+  warningText?: string;
+}
+
+function evaluateLethalRisk(
+  parsed: ParsedAction,
+  outcome: ReturnType<typeof resolveAction>,
+  start: OfflineStart,
+  state: OfflineGameState,
+): LethalRiskResult {
+  const arc = storyArc(start);
+  const intents = [parsed.primary, ...(parsed.secondary ? [parsed.secondary] : [])];
+  const hasIntent = (...wanted: LocalIntent[]) => intents.some((intent) => wanted.includes(intent));
+  const explicitHazard = arc.hazardTerms.some((term) => parsed.normalized.includes(normalizeText(term)));
+  const recklessLanguage = /\b(sozinho|sem cuidado|sem cautela|sem pensar|nao ligo|de qualquer jeito|arrombo|invado|vou pra cima|corro direto|ignoro o aviso|ignoro o perigo)\b/.test(parsed.normalized);
+  const riskyIntent = hasIntent("fight", "threaten", "follow", "hide", "steal", "occult") || (hasIntent("travel", "use-item") && state.phase >= 2);
+
+  let delta = 0;
+  if (riskyIntent) delta += 5;
+  if (outcome.success === "fail") delta += 9;
+  else if (outcome.success === "mixed") delta += 4;
+  if (parsed.aggressive) delta += 5;
+  if (recklessLanguage) delta += 8;
+  if (explicitHazard) delta += 18;
+  if (state.pressure >= 60) delta += 4;
+  if (state.pressure >= 85) delta += 7;
+  if (state.phase >= 3) delta += 3;
+  if (parsed.cautious) delta -= 8;
+  if (parsed.specificity >= 4) delta -= 3;
+  if (outcome.success === "strong") delta -= 4;
+
+  state.danger = Math.max(0, Math.min(100, state.danger + delta));
+  if ((riskyIntent && !parsed.cautious && (recklessLanguage || parsed.specificity <= 2)) || explicitHazard) {
+    state.recklessness = Math.min(20, state.recklessness + (explicitHazard ? 2 : 1));
+  } else if (parsed.cautious && outcome.success !== "fail") {
+    state.recklessness = Math.max(0, state.recklessness - 1);
+    state.danger = Math.max(0, state.danger - 4);
+  }
+
+  // Perigo narrado + escolha que viola exatamente o aviso do arco + falha: morte imediata e explicável.
+  if (explicitHazard && outcome.success === "fail") {
+    state.deathEndingId = "dead-arc";
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: ignorou um perigo específico do caso — ${parsed.raw}`]);
+    return { deathEndingId: "dead-arc", scene: arc.deathScene };
+  }
+  if (explicitHazard && state.recklessness >= 4 && state.danger >= 70 && outcome.success !== "strong") {
+    state.deathEndingId = "dead-arc";
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: repetiu um risco explicitamente sinalizado até perder a margem de segurança.`]);
+    return { deathEndingId: "dead-arc", scene: arc.deathScene };
+  }
+
+  // Mexer no oculto sem conhecimento suficiente fica progressivamente mais perigoso.
+  if (hasIntent("occult") && outcome.success === "fail" && (state.occultExposure >= 6 || state.recklessness >= 3)) {
+    state.deathEndingId = "dead-occult";
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: insistiu em contato oculto sem domínio suficiente.`]);
+    return {
+      deathEndingId: "dead-occult",
+      scene: `O erro não produz uma explosão teatral; produz compreensão demais de uma vez. O padrão que eu tentava manipular fecha ao meu redor e, por um segundo, percebo que eu era a variável mais frágil do ritual. A consciência perde continuidade antes que o corpo tenha tempo de fugir.`,
+    };
+  }
+
+  // Briga perdida sob pressão real não vira “falha com flavor”: pode matar.
+  if (hasIntent("fight", "threaten") && outcome.success === "fail" && (state.pressure >= 65 || state.wounds >= 1 || state.recklessness >= 3)) {
+    state.deathEndingId = state.pressure >= 88 ? "dead-ambush" : "dead-combat";
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: escalou confronto em desvantagem — ${parsed.raw}`]);
+    return {
+      deathEndingId: state.deathEndingId,
+      scene: state.pressure >= 88
+        ? `Eu avanço quando já havia gente demais acompanhando meus passos. A resposta vem de um ângulo que nunca cheguei a verificar. O som do disparo se perde na névoa antes de eu entender de onde veio.`
+        : `Eu transformo tensão em confronto e descubro tarde demais que vontade não é vantagem física. O primeiro golpe sério muda minha respiração; o segundo tira de mim a chance de recuar.`,
+    };
+  }
+
+  if (hasIntent("follow", "hide", "travel", "steal") && outcome.success === "fail" && state.pressure >= 88 && (state.recklessness >= 2 || recklessLanguage)) {
+    state.deathEndingId = hasIntent("follow", "travel") ? "dead-chase" : "dead-pressure";
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: insistiu em movimentação clandestina quando a rede já estava alerta.`]);
+    return {
+      deathEndingId: state.deathEndingId,
+      scene: hasIntent("follow", "travel")
+        ? `A perseguição deixa de ser discreta e vira uma sequência de decisões rápidas demais. Eu escolho o caminho mais curto sem conferir a saída. É o último erro que consigo identificar como meu.`
+        : `O esconderijo parecia bom quando ainda havia anonimato. Sob pressão alta, ele só me mantém parado enquanto outras pessoas fecham as saídas. Quando percebo, já não existe direção sem alguém esperando.`,
+    };
+  }
+
+  // Ferimentos persistem. Repetir risco depois de sobreviver cobra o preço.
+  const severeFailure = riskyIntent && outcome.success === "fail" && (state.danger >= 35 || state.pressure >= 55);
+  const harshMixed = riskyIntent && outcome.success === "mixed" && (explicitHazard || state.danger >= 70);
+  if (severeFailure || harshMixed) {
+    state.wounds += 1;
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: ferimento grave após ${intentLabel(parsed.primary)}.`]);
+    if (state.wounds >= 3) {
+      state.deathEndingId = "dead-wounds";
+      return {
+        deathEndingId: "dead-wounds",
+        scene: `Eu já vinha compensando dor, sangue perdido e movimentos cada vez mais lentos. O corpo cobra tudo de uma vez. Tento continuar pela mesma força de vontade que me salvou antes, mas desta vez ela chega sem força física para sustentá-la.`,
+      };
+    }
+    return {
+      injuryText: `O erro deixa consequência física real. Saio ferido desta ação (${state.wounds}/3 ferimentos graves). Posso continuar, mas repetir o mesmo nível de risco sem recuperar margem transforma a próxima falha em algo potencialmente definitivo.`,
+      warningText: state.wounds >= 2
+        ? `Estou a um ferimento grave de não voltar desta investigação. A próxima decisão arriscada precisa justificar esse preço.`
+        : arc.fatalWarning,
+    };
+  }
+
+  if (state.pressure >= 95 && riskyIntent && outcome.success !== "strong" && state.recklessness >= 4) {
+    state.deathEndingId = "dead-pressure";
+    state.fatalMistakes = unique([...state.fatalMistakes, `Turno ${state.turn}: continuou agindo de forma previsível sob pressão extrema.`]);
+    return {
+      deathEndingId: "dead-pressure",
+      scene: `A investigação já estava quente demais para movimentos improvisados. Eu repito um padrão que funcionou antes e descubro que alguém passou os últimos turnos esperando exatamente por isso.`,
+    };
+  }
+
+  return {
+    warningText: state.danger >= 70
+      ? `O risco acumulado está alto. A narrativa já mostrou que existem pessoas e fenômenos capazes de matar; agir sem cautela agora não terá proteção de roteiro.`
+      : undefined,
+  };
+}
+
+function endingNarrativeScore(end: OfflineEnding, state: OfflineGameState): number {
+  const structural: Record<string, number> = {
+    "case-solved": 120,
+    "public-scandal": 116,
+    "private-truth": 112,
+    "institutional": 108,
+    "threshold": 105,
+    "conspiracy-recruited": 103,
+    "double-agent": 102,
+    "blackmail": 100,
+    "scarred-survivor": 98,
+    "fugitive": 97,
+    "collector": 94,
+    "watcher": 92,
+    "trusted-network": 90,
+    "protector": 89,
+    "wanted": 88,
+    "hard-boiled": 87,
+    "master-liar": 86,
+    "betrayed": 84,
+    "burned-evidence": 82,
+    "mob-justice": 80,
+    "refusal": 79,
+    "accidental-hero": 78,
+    "cold-truth": 77,
+    "merciful": 76,
+    "quiet-life": 74,
+    "obsession": 72,
+    "sacrifice": 70,
+  };
+  let score = structural[end.id] || 50;
+  if (state.route === "institucional" && ["case-solved", "institutional", "public-scandal"].includes(end.id)) score += 12;
+  if (state.route === "clandestina" && ["private-truth", "blackmail", "double-agent", "master-liar", "conspiracy-recruited"].includes(end.id)) score += 12;
+  if (state.route === "mistério" && ["threshold", "watcher", "collector", "scarred-survivor", "refusal"].includes(end.id)) score += 12;
+  if (state.route === "alianças" && ["trusted-network", "protector", "accidental-hero"].includes(end.id)) score += 12;
+  if (state.route === "confronto" && ["hard-boiled", "wanted", "mob-justice"].includes(end.id)) score += 10;
+  if (state.route === "fuga" && end.id === "fugitive") score += 15;
+  score += Math.min(12, state.evidence);
+  if (["merciful", "hard-boiled", "cold-truth", "mob-justice"].includes(end.id)) {
+    // Finais comportamentais só sobem ao topo quando o padrão foi repetido; uma única decisão ruim/boa não redefine a crônica.
+    score -= 8;
+  }
+  return score + seeded01(hashString(`${state.seed}|ending-score|${end.id}`));
+}
+
 function maybeEnding(origin: GameOrigin, state: OfflineGameState, ledger: LedgerData): OfflineEnding | undefined {
+  if (state.deathEndingId) {
+    return ENDINGS.find((e) => e.id === state.deathEndingId);
+  }
   const forced = ENDINGS.find((e) => ["broken-mind", "vanished"].includes(e.id) && e.condition(state, ledger));
   if (forced) return forced;
   if (state.turn < 14) return undefined;
-  const candidates = ENDINGS.filter((e) => e.id !== "open-door" && e.condition(state, ledger));
+
+  const candidates = ENDINGS
+    .filter((e) => !e.id.startsWith("dead-") && e.id !== "open-door" && e.condition(state, ledger))
+    .sort((a, b) => endingNarrativeScore(b, state) - endingNarrativeScore(a, state));
+
   if (candidates.length > 0 && (state.turn >= 18 || state.evidence >= 9 || state.pressure >= 88)) {
-    return candidates[Math.floor(seeded01(state.seed + state.turn * 97) * candidates.length) % candidates.length];
+    return candidates[0];
   }
   if (state.turn >= 26) return ENDINGS.find((e) => e.id === "open-door");
   return undefined;
 }
 
-function endingTurn(origin: GameOrigin, state: OfflineGameState, ledger: LedgerData, end: OfflineEnding): OfflineTurnResult {
+function relationshipEpilogue(start: OfflineStart, state: OfflineGameState): string {
+  const primary = state.npcTrust[normalizeText(start.npc.name)] ?? 0;
+  const secondary = state.npcTrust[normalizeText(start.secondNpc.name)] ?? 0;
+  const lines: string[] = [];
+  if (primary >= 4) lines.push(`${start.npc.name} continua ligado à minha história. Não porque eu tenha sido sempre gentil, mas porque, nos momentos que importavam para essa pessoa, construí crédito suficiente para ser ouvido.`);
+  else if (primary <= -4) lines.push(`${start.npc.name} não esquece o modo como conduzi o caso. Mesmo que minhas escolhas tenham funcionado em outros lugares, essa relação termina quebrada — e algumas portas fecham especificamente por causa disso.`);
+  if (secondary >= 4) lines.push(`${start.secondNpc.name} torna-se uma das poucas pessoas capazes de confirmar partes da história que pareceriam delírio para qualquer estranho.`);
+  else if (secondary <= -4) lines.push(`${start.secondNpc.name} sobrevive à investigação com uma versão de mim que eu não controlo; em certos círculos, é essa versão que passa a circular.`);
+  if (!lines.length) lines.push(`Nem ${start.npc.name} nem ${start.secondNpc.name} se tornam simples marcadores de “bom” ou “mau”. Cada um guarda o que fiz diretamente com eles, e essas lembranças seguem produzindo pequenas consequências depois do caso.`);
+  return lines.join(" ");
+}
+
+function endingTurn(origin: GameOrigin, state: OfflineGameState, ledger: LedgerData, end: OfflineEnding, deathScene?: string): OfflineTurnResult {
   state.endingId = end.id;
+  const start = getStart(state);
+  const arc = storyArc(start);
+  const expansion = OFFLINE_ENDING_EXPANSIONS[end.id] || "O caso termina, mas suas consequências continuam nas pessoas e lugares que sobreviveram a ele.";
+  const relationship = relationshipEpilogue(start, state);
+  const isDeath = end.id.startsWith("dead-") || end.id === "vanished" || end.id === "sacrifice";
+  const scene = [
+    deathScene,
+    end.epilogue(origin, state, ledger),
+    expansion,
+    isDeath ? `O mundo não encerra junto comigo. ${start.npc.name}, ${start.secondNpc.name} e as pessoas tocadas pelo caso continuam tomando decisões a partir do que deixei para trás.` : relationship,
+    arc.epilogueEcho,
+  ].filter(Boolean).join("\n\n");
   const finalText = formatTurn(
-    `${end.epilogue(origin, state, ledger)}\n\nQuando penso no primeiro detalhe que me trouxe até aqui, ele parece pequeno demais para ter mudado tanta coisa. Ainda assim, foi exatamente assim que começou.`,
-    `“Toda investigação termina duas vezes: quando encontramos uma resposta e quando decidimos o que fazer com ela.”`,
-    `${ledger.location} | Epílogo | Seed: ${state.campaignSeed} | Fim alcançado: ${end.title}`,
-    `FIM — ${end.title}\n\nEsta crônica chegou a um dos ${ENDINGS.length} desfechos do Motor Local. Uma nova partida pode começar por outro dos ${STARTS.length} prólogos e seguir uma combinação diferente de consequências.`
+    scene,
+    isDeath
+      ? `Não existe proteção de protagonista em Loen. Um risco compreensível pode ser aceito; uma imprudência repetida ou uma falha diante de perigo letal pode encerrar a história.`
+      : `“Toda investigação termina duas vezes: quando encontramos uma resposta e quando decidimos o que fazer com ela.”`,
+    `${ledger.location} | Epílogo | Seed: ${state.campaignSeed} | Fim alcançado: ${end.title} | Evidências: ${state.evidence} | Ferimentos: ${state.wounds}/3`,
+    `FIM — ${end.title}\n\nEsta crônica alcançou um dos ${ENDINGS.length} desfechos do Motor Local. O prólogo, as relações, a rota de investigação, os riscos assumidos e os erros acumulados determinaram como ela terminou.`
   );
   ledger.offlineState = state;
-  return { text: finalText, ledger, mood: "discovery", suggestedActions: [], ending: end };
+  return { text: finalText, ledger, mood: isDeath ? "tension" : "discovery", suggestedActions: [], ending: end };
 }
 
 export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger: LedgerData): OfflineTurnResult {
@@ -2226,6 +2508,13 @@ export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger
     ];
   }
 
+  const lethalRisk = evaluateLethalRisk(parsed, result, start, state);
+  if (lethalRisk.deathEndingId) {
+    ledger.offlineState = state;
+    const fatalEnd = maybeEnding(origin, state, ledger);
+    if (fatalEnd) return endingTurn(origin, state, ledger, fatalEnd, lethalRisk.scene);
+  }
+
   // Concrete but non-magical discoveries slowly expose the larger occult layer.
   if (state.evidence >= 4 && !state.flags.includes("pattern-seen")) {
     state.flags.push("pattern-seen");
@@ -2254,6 +2543,8 @@ export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger
   const statusPressure = state.pressure >= 75 ? "ameaça imediata" : state.pressure >= 45 ? "atenção hostil crescente" : "tensão controlável";
   const sceneParts = [
     consequence.scene,
+    lethalRisk.injuryText ? `CONSEQUÊNCIA FÍSICA — ${lethalRisk.injuryText}` : undefined,
+    lethalRisk.warningText ? `RISCO — ${lethalRisk.warningText}` : undefined,
     phaseEvent?.text,
     intermediateEvent?.text ? `EVENTO — ${intermediateEvent.text}` : undefined,
     agendaEvent?.text ? `MOVIMENTO DE NPC — ${agendaEvent.text}` : undefined,
@@ -2264,7 +2555,7 @@ export function runOfflineTurn(action: string, origin: GameOrigin, currentLedger
   const text = formatTurn(
     sceneParts.join("\n\n"),
     dialogueParts.join("\n\n") || consequence.dialogue,
-    `${ledger.location} | ${ledger.timeAndWeather} | Seed: ${state.campaignSeed} | Evidências: ${state.evidence} | Eventos: ${state.eventHistory.length} | ${statusPressure}`,
+    `${ledger.location} | ${ledger.timeAndWeather} | Seed: ${state.campaignSeed} | Evidências: ${state.evidence} | Ferimentos: ${state.wounds}/3 | Risco: ${state.danger}/100 | Eventos: ${state.eventHistory.length} | ${statusPressure}`,
     dilemmaText(options)
   );
 
