@@ -1,0 +1,22 @@
+{
+  "name": "Beyonder's Life — Lord of the Mysteries RPG",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Beyonder's Life (dev server)",
+      "onAutoForward": "openPreview"
+    }
+  },
+  "postCreateCommand": "npm install",
+  "postAttachCommand": "echo 'Rode: npm run dev  —  e configure GEMINI_API_KEY em Codespaces > Settings > Secrets, ou crie um arquivo .env local (veja .env.example).'",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss"
+      ]
+    }
+  }
+}
